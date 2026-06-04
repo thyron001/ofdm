@@ -401,7 +401,6 @@ function dibujarMapaSC(mapa) {
 // === Monte Carlo                                          ===
 // ===========================================================
 async function ejecutarMontecarlo() {
-  if (!estado.imagenSubida) { alert('Sube una imagen primero'); return; }
   $('btn-mc').disabled = true;
   $('btn-mc').innerHTML = '<span class="spinner"></span> Ejecutando Monte Carlo...';
   $('estado-sim').textContent = 'Monte Carlo: 3 modulaciones × 11 SNR × 10 corridas...';

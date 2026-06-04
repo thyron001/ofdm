@@ -361,6 +361,7 @@ def cadena_tx_rx(bits_tx: np.ndarray, modulacion: str, params: Dict,
     simbolos_rx_datos = []
 
     bits_rx_total = []
+    _, indices_datos_sc = indices_pilotos_datos(n_sc)
     for i in range(n_ofdm):
         bloque_datos = simbolos_qam[i * n_datos:(i + 1) * n_datos]
         rejilla = insertar_pilotos(bloque_datos, n_sc)
@@ -368,17 +369,16 @@ def cadena_tx_rx(bits_tx: np.ndarray, modulacion: str, params: Dict,
 
         # === Canal Pedestrian A: aplicamos en frecuencia ===
         H = generar_canal_pedestrian_a(n_fft, fs, indices_fft, rng)
-        # Reconstruir señal pasada por canal: demodular ideal, multiplicar por H, remodular
-        # Más eficiente: pasamos por convolución circular equivalente vía FFT
         rejilla_freq = rejilla * H
         senal_canal, _ = modulacion_ofdm(rejilla_freq, n_fft, n_cp)
 
         # === AWGN ===
         senal_rx = agregar_ruido_awgn(senal_canal, snr_db, rng)
 
-        # === RX (sin ecualización) ===
+        # === RX con ecualización Zero-Forcing (canal conocido) ===
         rejilla_rx = demodulacion_ofdm(senal_rx, indices_fft, n_fft, n_cp, n_sc)
-        datos_rx = extraer_datos_de_pilotos(rejilla_rx, n_sc)
+        rejilla_eq = rejilla_rx / H
+        datos_rx = rejilla_eq[indices_datos_sc]
         if capturar_constelaciones:
             simbolos_rx_datos.append(datos_rx)
 
@@ -561,10 +561,8 @@ def montecarlo():
     except KeyError as e:
         return jsonify({"error": f"Falta campo {e}"}), 400
 
-    if ESTADO["bits"] is None:
-        return jsonify({"error": "Primero suba una imagen"}), 400
-
-    bits_fuente = ESTADO["bits"]
+    # Monte Carlo usa bits aleatorios (independiente de la imagen)
+    N_BITS_MC = 6800
     snr_valores = list(range(0, 11))
     n_sim = 10
     rng = np.random.default_rng()
@@ -575,14 +573,15 @@ def montecarlo():
     resultados = {}
     for modulacion in ["QPSK", "16-QAM", "64-QAM"]:
         bps = MODULACIONES[modulacion]["bits"]
-        params = calcular_parametros_ofdm(bw, df, cp, len(bits_fuente), bps)
+        params = calcular_parametros_ofdm(bw, df, cp, N_BITS_MC, bps)
         ber_prom = []
         ic_inf = []
         ic_sup = []
         for snr in snr_valores:
             bers = []
             for _ in range(n_sim):
-                r = cadena_tx_rx(bits_fuente, modulacion, params, snr, rng,
+                bits_aleatorios = rng.integers(0, 2, N_BITS_MC, dtype=np.uint8)
+                r = cadena_tx_rx(bits_aleatorios, modulacion, params, snr, rng,
                                   capturar_constelaciones=False)
                 bers.append(r["ber"])
             bers = np.array(bers)
