@@ -520,7 +520,7 @@ function pintarMC(j) {
           type: 'linear',
           title: { display: true, text: 'SNR (dB)', font: { weight: 700 } },
           ticks: { stepSize: 1 },
-          min: -0.5, max: 10.5,
+          min: -0.5, max: 20.5,
         },
         y: {
           type: 'logarithmic',

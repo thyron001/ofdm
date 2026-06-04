@@ -571,8 +571,8 @@ def montecarlo():
         return jsonify({"error": f"Falta campo {e}"}), 400
 
     # Monte Carlo usa bits aleatorios (independiente de la imagen)
-    N_BITS_MC = 6800
-    snr_valores = list(range(0, 11))
+    N_BITS_MC = 50000
+    snr_valores = list(range(0, 21))
     n_sim = 10
     rng = np.random.default_rng()
 
