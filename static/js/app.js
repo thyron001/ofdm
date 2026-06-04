@@ -103,7 +103,7 @@ function sincSNR() {
   $('snr').addEventListener('input', () => { $('snr-num').value = $('snr').value; });
   $('snr-num').addEventListener('input', () => {
     let v = parseInt($('snr-num').value || '0');
-    if (v < 0) v = 0; if (v > 30) v = 30;
+    if (v < 0) v = 0; if (v > 100) v = 100;
     $('snr').value = v;
   });
 }
