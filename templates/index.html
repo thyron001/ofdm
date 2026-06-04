@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Simulador OFDM-LTE</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+</head>
+<body>
+  <header class="header">
+    <h1>Simulador OFDM-LTE</h1>
+    <div class="sub">Transmisión, canal Pedestrian A (ITU-R M.1225), AWGN y análisis Monte Carlo</div>
+  </header>
+
+  <div class="contenedor">
+
+    <!-- ============ SIDEBAR ============ -->
+    <aside class="sidebar">
+
+      <section class="tarjeta">
+        <h2>Configuración OFDM</h2>
+        <div class="campo">
+          <label class="campo-label" for="bw">Ancho de Banda (BW)</label>
+          <select id="bw">
+            <option value="1.4">1.4 MHz</option>
+            <option value="3">3 MHz</option>
+            <option value="5" selected>5 MHz</option>
+            <option value="10">10 MHz</option>
+            <option value="15">15 MHz</option>
+            <option value="20">20 MHz</option>
+          </select>
+        </div>
+        <div class="campo">
+          <label class="campo-label" for="df">Espaciamiento Δf</label>
+          <select id="df">
+            <option value="15" selected>15 kHz</option>
+            <option value="7.5">7.5 kHz</option>
+          </select>
+        </div>
+        <div class="campo">
+          <label class="campo-label" for="cp">Prefijo Cíclico</label>
+          <select id="cp">
+            <option value="normal">Normal (4.7 µs)</option>
+            <option value="extendido">Extendido (16.67 µs)</option>
+          </select>
+        </div>
+        <div id="aviso-combinacion" class="aviso" style="display:none">
+          Δf = 7.5 kHz no es compatible con BW &lt; 5 MHz.
+        </div>
+      </section>
+
+      <section class="tarjeta">
+        <h2>Canal y Ruido</h2>
+        <div class="campo">
+          <label class="campo-label" for="snr">SNR (dB)</label>
+          <div class="slider-row">
+            <input type="range" id="snr" min="0" max="30" step="1" value="20" />
+            <input type="number" id="snr-num" min="0" max="30" step="1" value="20" />
+          </div>
+        </div>
+        <div class="campo">
+          <label class="campo-label">Modelo de Canal</label>
+          <span class="badge badge-azul">Pedestrian A (ITU-R M.1225)</span>
+        </div>
+        <table>
+          <thead>
+            <tr><th>Tap</th><th>Retardo (ns)</th><th>Potencia (dB)</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>1</td><td>0</td><td>0</td></tr>
+            <tr><td>2</td><td>110</td><td>-9.7</td></tr>
+            <tr><td>3</td><td>190</td><td>-19.2</td></tr>
+            <tr><td>4</td><td>410</td><td>-22.8</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section class="tarjeta">
+        <h2>Imagen</h2>
+        <div class="campo">
+          <label class="campo-label" for="archivo-imagen">Subir imagen (.png, .jpg, .bmp)</label>
+          <input type="file" id="archivo-imagen" accept=".png,.jpg,.jpeg,.bmp" />
+        </div>
+        <img id="preview-imagen" alt="Preview" />
+        <div id="info-imagen" class="estado"></div>
+      </section>
+    </aside>
+
+    <!-- ============ PRINCIPAL ============ -->
+    <main class="principal">
+
+      <!-- Canvas cobertura -->
+      <section class="tarjeta">
+        <h2>Mapa de Cobertura</h2>
+        <div class="cobertura-cont">
+          <canvas id="canvas-cobertura" width="500" height="500"></canvas>
+          <div class="info-cobertura">
+            <span>Distancia: <strong id="distancia-ue">0</strong> m</span>
+            <span>Modulación activa:
+              <span id="badge-modulacion" class="badge badge-verde">64-QAM</span>
+            </span>
+          </div>
+        </div>
+        <div class="acciones" style="margin-top:14px; justify-content:center">
+          <button id="btn-simular" class="boton boton-primario">Simular Transmisión</button>
+          <button id="btn-mc" class="boton boton-exito">Simulación Monte Carlo</button>
+        </div>
+        <div id="estado-sim" class="estado" style="text-align:center; margin-top:10px"></div>
+      </section>
+
+      <!-- Parámetros calculados -->
+      <section class="tarjeta">
+        <h2>Parámetros Calculados</h2>
+        <div id="kv-params" class="kv-grid"></div>
+      </section>
+
+      <!-- Resultados simulación -->
+      <div id="zona-resultados" style="display:none">
+        <div class="grid-resultados">
+          <section class="tarjeta">
+            <h3>Imágenes TX / RX</h3>
+            <div class="img-comparativa">
+              <figure>
+                <img id="img-tx" alt="Original" />
+                <figcaption>Original</figcaption>
+              </figure>
+              <figure>
+                <img id="img-rx" alt="Recuperada" />
+                <figcaption>Recuperada</figcaption>
+              </figure>
+            </div>
+            <div class="ber-grande">
+              <div class="lbl">BER</div>
+              <div class="valor" id="ber-valor">—</div>
+              <div class="lbl" id="ber-detalle"></div>
+            </div>
+          </section>
+
+          <section class="tarjeta">
+            <h3>Constelación RX</h3>
+            <canvas id="constelacion-canvas" width="400" height="400"></canvas>
+            <div class="estado" id="titulo-constelacion" style="text-align:center; margin-top:6px"></div>
+          </section>
+
+          <section class="tarjeta">
+            <h3>Mapa de Subportadoras</h3>
+            <canvas id="mapa-sc-canvas" width="800" height="120"></canvas>
+            <div class="estado" id="resumen-sc" style="margin-top:8px"></div>
+          </section>
+
+          <section class="tarjeta">
+            <h3>Parámetros de la Transmisión</h3>
+            <div id="kv-params-resumen" class="kv-grid"></div>
+          </section>
+        </div>
+      </div>
+
+      <!-- Monte Carlo -->
+      <section id="tarjeta-mc" class="tarjeta" style="display:none">
+        <h3>BER vs SNR — Simulación Monte Carlo (10 corridas, IC 95% T-Student)</h3>
+        <canvas id="montecarlo-canvas" height="120"></canvas>
+      </section>
+
+    </main>
+  </div>
+
+  <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html>
