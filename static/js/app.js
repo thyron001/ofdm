@@ -94,12 +94,6 @@ function renderKV(contenedorId, p, extras = {}) {
   if (extras.tiempo_aire_s != null) {
     items.push(['Tiempo de transmisión (aire)', formatearTiempo(extras.tiempo_aire_s)]);
   }
-  if (extras.throughput_bps != null) {
-    items.push(['Throughput de la transmisión', formatearTasa(extras.throughput_bps)]);
-  }
-  if (extras.tiempo_computo_s != null) {
-    items.push(['Tiempo de cómputo (servidor)', extras.tiempo_computo_s.toFixed(3) + ' s']);
-  }
   $(contenedorId).innerHTML = items.map(([l, v]) =>
     `<div class="kv"><div class="kv-label">${l}</div><div class="kv-valor">${v}</div></div>`
   ).join('');
@@ -340,8 +334,6 @@ function pintarResultados(j) {
   dibujarMapaSC(j.mapa_subportadoras);
   renderKV('kv-params-resumen', j.parametros, {
     tiempo_aire_s: j.tiempo_aire_s,
-    throughput_bps: j.throughput_bps,
-    tiempo_computo_s: j.tiempo_computo_s,
   });
   $('titulo-constelacion').textContent = `Constelación RX — ${j.modulacion}`;
   $('resumen-sc').textContent = `Datos: ${j.mapa_subportadoras.datos} · Pilotos: ${j.mapa_subportadoras.pilotos} · Total: ${j.mapa_subportadoras.total}`;

@@ -59,8 +59,8 @@ PASO_PILOTO = 12  # 1 piloto cada 12 subportadoras
 
 def qpsk_mapear(bits: np.ndarray) -> np.ndarray:
     """Mapea bits a símbolos QPSK normalizados (energía media unitaria)."""
-    bits = bits.reshape(-1, 2)
-    # Gray: 0->-1, 1->+1
+    bits = bits.reshape(-1, 2).astype(np.int8)
+    # Gray: 0 -> +1, 1 -> -1
     i = 1 - 2 * bits[:, 0]
     q = 1 - 2 * bits[:, 1]
     return (i + 1j * q) / np.sqrt(2)
