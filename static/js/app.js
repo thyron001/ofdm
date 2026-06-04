@@ -76,24 +76,44 @@ async function actualizarParametros() {
   }
 }
 
-function renderKV(contenedorId, p) {
+function renderKV(contenedorId, p, extras = {}) {
   const items = [
-    ['N_SC',                p.n_sc],
-    ['N_FFT',               p.n_fft],
-    ['fs (MHz)',            (p.fs / 1e6).toFixed(3)],
-    ['N_CP',                p.n_cp],
-    ['Pilotos',             p.n_pilotos],
-    ['Datos',               p.n_datos],
-    ['Bits imagen',         estado.nBits || '—'],
-    ['Símbolos QAM',        p.n_simbolos_qam],
-    ['Símbolos OFDM',       p.n_simbolos_ofdm],
-    ['Dur. símbolo (µs)',   p.duracion_simbolo_us.toFixed(2)],
-    ['Dur. CP (µs)',        p.duracion_cp_us.toFixed(2)],
-    ['Modulación',          estado.modulacion],
+    ['Subportadoras útiles (N_SC)',         p.n_sc],
+    ['Tamaño de la FFT (N_FFT)',            p.n_fft],
+    ['Frecuencia de muestreo (fs)',         (p.fs / 1e6).toFixed(3) + ' MHz'],
+    ['Muestras de prefijo cíclico (N_CP)',  p.n_cp],
+    ['Subportadoras piloto',                p.n_pilotos],
+    ['Subportadoras de datos',              p.n_datos],
+    ['Bits totales de la imagen',           (estado.nBits || 0).toLocaleString()],
+    ['Símbolos QAM totales',                p.n_simbolos_qam.toLocaleString()],
+    ['Símbolos OFDM transmitidos',          p.n_simbolos_ofdm.toLocaleString()],
+    ['Duración de cada símbolo OFDM',       p.duracion_simbolo_us.toFixed(2) + ' µs'],
+    ['Duración del prefijo cíclico',        p.duracion_cp_us.toFixed(2) + ' µs'],
+    ['Modulación aplicada',                 estado.modulacion || '—'],
   ];
+  if (extras.tiempo_aire_s != null) {
+    items.push(['Tiempo de transmisión (aire)', formatearTiempo(extras.tiempo_aire_s)]);
+  }
+  if (extras.throughput_bps != null) {
+    items.push(['Throughput de la transmisión', formatearTasa(extras.throughput_bps)]);
+  }
+  if (extras.tiempo_computo_s != null) {
+    items.push(['Tiempo de cómputo (servidor)', extras.tiempo_computo_s.toFixed(3) + ' s']);
+  }
   $(contenedorId).innerHTML = items.map(([l, v]) =>
     `<div class="kv"><div class="kv-label">${l}</div><div class="kv-valor">${v}</div></div>`
   ).join('');
+}
+
+function formatearTiempo(s) {
+  if (s < 1e-3) return (s * 1e6).toFixed(2) + ' µs';
+  if (s < 1) return (s * 1e3).toFixed(3) + ' ms';
+  return s.toFixed(3) + ' s';
+}
+function formatearTasa(bps) {
+  if (bps >= 1e6) return (bps / 1e6).toFixed(2) + ' Mbps';
+  if (bps >= 1e3) return (bps / 1e3).toFixed(2) + ' kbps';
+  return bps.toFixed(0) + ' bps';
 }
 
 // ===========================================================
@@ -318,7 +338,11 @@ function pintarResultados(j) {
 
   dibujarConstelacion(j.constelacion_tx, j.constelacion_rx, j.modulacion);
   dibujarMapaSC(j.mapa_subportadoras);
-  renderKV('kv-params-resumen', j.parametros);
+  renderKV('kv-params-resumen', j.parametros, {
+    tiempo_aire_s: j.tiempo_aire_s,
+    throughput_bps: j.throughput_bps,
+    tiempo_computo_s: j.tiempo_computo_s,
+  });
   $('titulo-constelacion').textContent = `Constelación RX — ${j.modulacion}`;
   $('resumen-sc').textContent = `Datos: ${j.mapa_subportadoras.datos} · Pilotos: ${j.mapa_subportadoras.pilotos} · Total: ${j.mapa_subportadoras.total}`;
 }
@@ -431,15 +455,46 @@ async function ejecutarMontecarlo() {
   }
 }
 
+// Plugin para dibujar barras de error en cada punto
+const PLUGIN_ERROR_BARS = {
+  id: 'errorBars',
+  afterDatasetsDraw(chart) {
+    const { ctx, scales: { x, y } } = chart;
+    chart.data.datasets.forEach((ds, idx) => {
+      if (!ds.errorBars) return;
+      const meta = chart.getDatasetMeta(idx);
+      if (meta.hidden) return;
+      ctx.save();
+      ctx.strokeStyle = ds.borderColor;
+      ctx.lineWidth = 1.8;
+      ds.data.forEach((pt, i) => {
+        const eb = ds.errorBars[i];
+        if (!eb) return;
+        const px = x.getPixelForValue(pt.x);
+        const pyMin = y.getPixelForValue(Math.max(eb.lo, y.min));
+        const pyMax = y.getPixelForValue(Math.max(eb.hi, y.min));
+        const w = 6;
+        ctx.beginPath();
+        ctx.moveTo(px, pyMin); ctx.lineTo(px, pyMax);
+        ctx.moveTo(px - w, pyMin); ctx.lineTo(px + w, pyMin);
+        ctx.moveTo(px - w, pyMax); ctx.lineTo(px + w, pyMax);
+        ctx.stroke();
+      });
+      ctx.restore();
+    });
+  },
+};
+
 function pintarMC(j) {
-  $('tarjeta-mc').style.display = 'block';
+  $('modal-mc').style.display = 'flex';
   const ctx = $('montecarlo-canvas').getContext('2d');
   if (estado.graficoMC) estado.graficoMC.destroy();
 
+  const PISO = 1e-5;
   const colores = {
-    'QPSK':   { c: '#18A34B', tint: 'rgba(24,163,75,0.2)' },
-    '16-QAM': { c: '#1E54E0', tint: 'rgba(30,84,224,0.2)' },
-    '64-QAM': { c: '#D82A2A', tint: 'rgba(216,42,42,0.2)' },
+    'QPSK':   '#18A34B',
+    '16-QAM': '#1E54E0',
+    '64-QAM': '#D82A2A',
   };
 
   const datasets = [];
@@ -447,30 +502,16 @@ function pintarMC(j) {
     const r = j.resultados[mod];
     datasets.push({
       label: mod,
-      data: r.ber_promedio.map((v, i) => ({ x: j.snr_valores[i], y: Math.max(v, 1e-6) })),
-      borderColor: colores[mod].c,
-      backgroundColor: colores[mod].tint,
-      pointRadius: 4,
-      tension: 0.2,
-      fill: false,
-    });
-    // Banda IC
-    datasets.push({
-      label: `${mod} IC95`,
-      data: r.ic_superior.map((v, i) => ({ x: j.snr_valores[i], y: Math.max(v, 1e-6) })),
-      borderColor: colores[mod].tint,
-      backgroundColor: colores[mod].tint,
-      pointRadius: 0,
-      borderDash: [4, 4],
-      fill: '+1',
-    });
-    datasets.push({
-      label: `${mod} IC95-`,
-      data: r.ic_inferior.map((v, i) => ({ x: j.snr_valores[i], y: Math.max(v, 1e-6) })),
-      borderColor: colores[mod].tint,
-      backgroundColor: colores[mod].tint,
-      pointRadius: 0,
-      borderDash: [4, 4],
+      data: r.ber_promedio.map((v, i) => ({ x: j.snr_valores[i], y: Math.max(v, PISO) })),
+      errorBars: r.ber_promedio.map((_, i) => ({
+        lo: Math.max(r.ic_inferior[i], PISO),
+        hi: Math.max(r.ic_superior[i], PISO),
+      })),
+      borderColor: colores[mod],
+      backgroundColor: colores[mod],
+      pointRadius: 5,
+      pointBackgroundColor: colores[mod],
+      tension: 0.15,
       fill: false,
     });
   }
@@ -481,26 +522,53 @@ function pintarMC(j) {
     options: {
       responsive: true,
       maintainAspectRatio: false,
+      animation: false,
       scales: {
-        x: { type: 'linear', title: { display: true, text: 'SNR (dB)' } },
+        x: {
+          type: 'linear',
+          title: { display: true, text: 'SNR (dB)', font: { weight: 700 } },
+          ticks: { stepSize: 1 },
+          min: -0.5, max: 10.5,
+        },
         y: {
           type: 'logarithmic',
-          title: { display: true, text: 'BER (log)' },
-          min: 1e-5,
+          title: { display: true, text: 'BER (escala logarítmica)', font: { weight: 700 } },
+          min: PISO,
           max: 1,
         },
       },
       plugins: {
-        legend: {
-          labels: { filter: (item) => !item.text.includes('IC95') },
-        },
-        title: {
-          display: true,
-          text: 'BER vs SNR — Monte Carlo (10 corridas, IC 95% T-Student)',
+        legend: { position: 'top', labels: { font: { weight: 700 } } },
+        tooltip: {
+          callbacks: {
+            label: (ctx) => {
+              const i = ctx.dataIndex;
+              const ds = ctx.dataset;
+              const eb = ds.errorBars[i];
+              return `${ds.label}: BER=${ctx.parsed.y.toExponential(2)}  IC95% [${eb.lo.toExponential(2)}, ${eb.hi.toExponential(2)}]`;
+            },
+          },
         },
       },
     },
+    plugins: [PLUGIN_ERROR_BARS],
   });
+}
+
+function descargarMC() {
+  if (!estado.graficoMC) return;
+  // Renderiza con fondo blanco
+  const src = $('montecarlo-canvas');
+  const tmp = document.createElement('canvas');
+  tmp.width = src.width; tmp.height = src.height;
+  const tctx = tmp.getContext('2d');
+  tctx.fillStyle = '#FFFFFF';
+  tctx.fillRect(0, 0, tmp.width, tmp.height);
+  tctx.drawImage(src, 0, 0);
+  const link = document.createElement('a');
+  link.download = `montecarlo_ber_snr_${Date.now()}.png`;
+  link.href = tmp.toDataURL('image/png');
+  link.click();
 }
 
 // ===========================================================
@@ -515,6 +583,29 @@ window.addEventListener('DOMContentLoaded', () => {
   $('archivo-imagen').addEventListener('change', subirImagen);
   $('btn-simular').addEventListener('click', ejecutarSimulacion);
   $('btn-mc').addEventListener('click', ejecutarMontecarlo);
+
+  // Lightbox
+  ['img-tx', 'img-rx'].forEach((id) => {
+    $(id).addEventListener('click', () => {
+      const lb = $('lightbox');
+      $('lightbox-img').src = $(id).src;
+      lb.style.display = 'flex';
+    });
+  });
+  $('lightbox').addEventListener('click', () => { $('lightbox').style.display = 'none'; });
+
+  // Modal Monte Carlo
+  $('btn-cerrar-mc').addEventListener('click', () => { $('modal-mc').style.display = 'none'; });
+  $('btn-descargar-mc').addEventListener('click', descargarMC);
+  $('modal-mc').addEventListener('click', (ev) => {
+    if (ev.target.id === 'modal-mc') $('modal-mc').style.display = 'none';
+  });
+  document.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Escape') {
+      $('lightbox').style.display = 'none';
+      $('modal-mc').style.display = 'none';
+    }
+  });
 
   actualizarUE();
   actualizarParametros();

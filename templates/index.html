@@ -159,13 +159,29 @@
         </div>
       </div>
 
-      <!-- Monte Carlo -->
-      <section id="tarjeta-mc" class="tarjeta" style="display:none">
-        <h3>BER vs SNR — Simulación Monte Carlo (10 corridas, IC 95% T-Student)</h3>
-        <canvas id="montecarlo-canvas" height="120"></canvas>
-      </section>
-
     </main>
+  </div>
+
+  <!-- Lightbox para imágenes -->
+  <div id="lightbox" class="lightbox" style="display:none">
+    <span class="lightbox-cerrar">&times;</span>
+    <img id="lightbox-img" alt="" />
+  </div>
+
+  <!-- Modal Monte Carlo -->
+  <div id="modal-mc" class="modal" style="display:none">
+    <div class="modal-contenido">
+      <div class="modal-header">
+        <h2>BER vs SNR — Monte Carlo (10 corridas, IC 95% T-Student)</h2>
+        <div class="modal-acciones">
+          <button id="btn-descargar-mc" class="boton boton-exito">Descargar PNG</button>
+          <button id="btn-cerrar-mc" class="boton boton-primario">Cerrar</button>
+        </div>
+      </div>
+      <div class="modal-body">
+        <canvas id="montecarlo-canvas"></canvas>
+      </div>
+    </div>
   </div>
 
   <script src="{{ url_for('static', filename='js/app.js') }}"></script>

@@ -6,6 +6,7 @@ está en este archivo. Comentarios y variables en español.
 
 import os
 import io
+import time
 import base64
 import math
 from typing import Dict, Tuple
@@ -510,8 +511,13 @@ def simular():
     params = calcular_parametros_ofdm(bw, df, cp, len(bits_tx), bps)
 
     rng = np.random.default_rng()
+    t0 = time.perf_counter()
     resultado = cadena_tx_rx(bits_tx, modulacion, params, snr, rng,
                               capturar_constelaciones=True)
+    tiempo_computo_s = time.perf_counter() - t0
+
+    # Tiempo "real" de transmisión OTA: N_OFDM × duración símbolo
+    tiempo_aire_s = resultado["n_simbolos_ofdm"] * params["duracion_simbolo_us"] * 1e-6
 
     # Reconstruir imagen
     img_rx = bits_a_imagen(resultado["bits_rx"], ESTADO["imagen_mode"], ESTADO["imagen_size"])
@@ -548,6 +554,9 @@ def simular():
             "indices_datos": datos_idx.tolist(),
         },
         "parametros": params,
+        "tiempo_aire_s": tiempo_aire_s,
+        "tiempo_computo_s": tiempo_computo_s,
+        "throughput_bps": (len(bits_tx) / tiempo_aire_s) if tiempo_aire_s > 0 else 0.0,
     })
 
 
