@@ -178,6 +178,7 @@ def siguiente_pot_2(n: int) -> int:
     return 1 << (int(n - 1).bit_length())
 
 
+# Tyrone check
 def duracion_cp_us(delta_f_khz: float, tipo_cp: str) -> float:
     """Duración del prefijo cíclico en microsegundos según LTE."""
     if delta_f_khz == 15:
@@ -189,13 +190,14 @@ def duracion_cp_us(delta_f_khz: float, tipo_cp: str) -> float:
         return 33.33
     raise ValueError("Combinación Δf/CP no válida")
 
-
+# Tyrone
 def calcular_parametros_ofdm(bw_mhz: float, delta_f_khz: float, tipo_cp: str,
                               n_bits: int, bits_por_simbolo: int) -> Dict:
     """Calcula todos los parámetros derivados de la configuración OFDM."""
     clave = (round(bw_mhz, 1), float(delta_f_khz))
     if clave not in TABLA_NSC:
         raise ValueError(f"Combinación BW={bw_mhz} MHz / Δf={delta_f_khz} kHz no disponible")
+    
     n_sc = TABLA_NSC[clave]
     n_fft = siguiente_pot_2(n_sc)
     fs = n_fft * delta_f_khz * 1e3  # Hz
@@ -225,7 +227,7 @@ def calcular_parametros_ofdm(bw_mhz: float, delta_f_khz: float, tipo_cp: str,
         "bw_hz": float(bw_mhz * 1e6),
     }
 
-
+# Tyrone
 def indices_pilotos_datos(n_sc: int, paso: int = PASO_PILOTO) -> Tuple[np.ndarray, np.ndarray]:
     """Devuelve los índices (dentro de [0, n_sc-1]) de pilotos y datos."""
     indices = np.arange(n_sc)
@@ -233,7 +235,7 @@ def indices_pilotos_datos(n_sc: int, paso: int = PASO_PILOTO) -> Tuple[np.ndarra
     datos = np.setdiff1d(indices, pilotos, assume_unique=False)
     return pilotos, datos
 
-
+# Tyrone
 def insertar_pilotos(simbolos_datos: np.ndarray, n_sc: int,
                      paso: int = PASO_PILOTO, valor_piloto: complex = 1 + 0j) -> np.ndarray:
     """Construye un vector de longitud n_sc con pilotos cada `paso` posiciones."""
@@ -245,14 +247,14 @@ def insertar_pilotos(simbolos_datos: np.ndarray, n_sc: int,
     rejilla[datos[:n]] = simbolos_datos[:n]
     return rejilla
 
-
+# Tyrone
 def extraer_datos_de_pilotos(simbolos_con_pilotos: np.ndarray, n_sc: int,
                               paso: int = PASO_PILOTO) -> np.ndarray:
     """Extrae solo los símbolos de datos (descarta posiciones piloto)."""
     _, datos = indices_pilotos_datos(n_sc, paso)
     return simbolos_con_pilotos[datos]
 
-
+# Freddy
 def mapeo_sc_a_fft(rejilla_sc: np.ndarray, n_fft: int) -> Tuple[np.ndarray, np.ndarray]:
     """
     Mapea las N_SC subportadoras al vector de N_FFT puntos en banda base,
@@ -269,7 +271,7 @@ def mapeo_sc_a_fft(rejilla_sc: np.ndarray, n_fft: int) -> Tuple[np.ndarray, np.n
     vec[indices_fft] = rejilla_sc
     return vec, indices_fft
 
-
+# Freddy
 def modulacion_ofdm(rejilla_sc: np.ndarray, n_fft: int, n_cp: int) -> Tuple[np.ndarray, np.ndarray]:
     """IFFT + CP. Retorna (señal_en_tiempo, indices_fft_activos)."""
     vec_freq, indices_fft = mapeo_sc_a_fft(rejilla_sc, n_fft)
@@ -277,7 +279,7 @@ def modulacion_ofdm(rejilla_sc: np.ndarray, n_fft: int, n_cp: int) -> Tuple[np.n
     cp = senal_t[-n_cp:] if n_cp > 0 else np.array([], dtype=complex)
     return np.concatenate([cp, senal_t]), indices_fft
 
-
+# Freddy
 def demodulacion_ofdm(simbolo_con_cp: np.ndarray, indices_fft: np.ndarray,
                        n_fft: int, n_cp: int, n_sc: int) -> np.ndarray:
     """Remueve CP, aplica FFT y extrae las N_SC subportadoras activas."""
@@ -285,7 +287,7 @@ def demodulacion_ofdm(simbolo_con_cp: np.ndarray, indices_fft: np.ndarray,
     espectro = np.fft.fft(sin_cp) / n_fft * np.sqrt(n_sc)
     return espectro[indices_fft]
 
-
+# Freddy
 def generar_canal_pedestrian_a(n_fft: int, fs: float, indices_fft: np.ndarray,
                                 rng: np.random.Generator) -> np.ndarray:
     """
@@ -306,7 +308,7 @@ def generar_canal_pedestrian_a(n_fft: int, fs: float, indices_fft: np.ndarray,
     H = np.fft.fft(h)
     return H[indices_fft]
 
-
+# Tyrone
 def agregar_ruido_awgn(senal: np.ndarray, snr_db: float, rng: np.random.Generator) -> np.ndarray:
     """Agrega AWGN complejo según el SNR dado (en dB)."""
     pot_senal = np.mean(np.abs(senal) ** 2)
@@ -314,6 +316,42 @@ def agregar_ruido_awgn(senal: np.ndarray, snr_db: float, rng: np.random.Generato
     ruido = np.sqrt(pot_ruido / 2) * (rng.standard_normal(senal.shape) +
                                        1j * rng.standard_normal(senal.shape))
     return senal + ruido
+
+
+def calcular_papr_simbolo(senal_tiempo: np.ndarray) -> float:
+    """PAPR (en dB) de un símbolo OFDM en tiempo (sin CP)."""
+    pot_pico = np.max(np.abs(senal_tiempo) ** 2)
+    pot_media = np.mean(np.abs(senal_tiempo) ** 2)
+    if pot_media <= 0:
+        return 0.0
+    return float(10 * np.log10(pot_pico / pot_media))
+
+
+def calcular_papr_ccdf(modulacion: str, params: Dict,
+                        n_simbolos: int, rng: np.random.Generator) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Genera n_simbolos OFDM aleatorios para la modulación y devuelve
+    (eje_x_dB, ccdf) donde ccdf[i] = Pr{PAPR > x_db[i]}.
+    """
+    mod = MODULACIONES[modulacion]
+    n_sc = params["n_sc"]
+    n_fft = params["n_fft"]
+    n_cp = params["n_cp"]
+    n_datos = params["n_datos"]
+    bps = mod["bits"]
+
+    paprs = np.empty(n_simbolos)
+    for i in range(n_simbolos):
+        bits = rng.integers(0, 2, n_datos * bps, dtype=np.uint8)
+        simbolos_qam = mod["mapear"](bits)
+        rejilla = insertar_pilotos(simbolos_qam, n_sc)
+        senal_t, _ = modulacion_ofdm(rejilla, n_fft, n_cp)
+        # quitar CP para PAPR sobre el símbolo OFDM puro
+        paprs[i] = calcular_papr_simbolo(senal_t[n_cp:])
+
+    eje_x = np.linspace(0, max(15.0, float(np.max(paprs)) + 0.5), 80)
+    ccdf = np.array([np.mean(paprs > x) for x in eje_x])
+    return eje_x, ccdf
 
 
 def calcular_ber(bits_tx: np.ndarray, bits_rx: np.ndarray) -> float:
@@ -328,6 +366,7 @@ def calcular_ber(bits_tx: np.ndarray, bits_rx: np.ndarray) -> float:
 # === CADENA TX/RX COMPLETA                                          ===
 # =====================================================================
 
+# Freddy
 def cadena_tx_rx(bits_tx: np.ndarray, modulacion: str, params: Dict,
                   snr_db: float, rng: np.random.Generator,
                   capturar_constelaciones: bool = False) -> Dict:
@@ -559,7 +598,7 @@ def simular():
         "throughput_bps": (len(bits_tx) / tiempo_aire_s) if tiempo_aire_s > 0 else 0.0,
     })
 
-
+# Tyrone
 @app.route("/montecarlo", methods=["POST"])
 def montecarlo():
     data = request.get_json(force=True)
@@ -572,7 +611,7 @@ def montecarlo():
 
     # Monte Carlo usa bits aleatorios (independiente de la imagen)
     N_BITS_MC = 50000
-    snr_valores = list(range(0, 21))
+    snr_valores = list(range(0, 16))
     n_sim = 10
     rng = np.random.default_rng()
 
@@ -606,11 +645,30 @@ def montecarlo():
             "ic_superior": ic_sup,
         }
 
+    # === PAPR CCDF (independiente del SNR) ===
+    N_SIMBOLOS_PAPR = 1500
+    papr_ccdf = {}
+    eje_papr = None
+    for modulacion in ["QPSK", "16-QAM", "64-QAM"]:
+        bps = MODULACIONES[modulacion]["bits"]
+        params = calcular_parametros_ofdm(bw, df, cp, N_BITS_MC, bps)
+        x, c = calcular_papr_ccdf(modulacion, params, N_SIMBOLOS_PAPR, rng)
+        if eje_papr is None:
+            eje_papr = x.tolist()
+        papr_ccdf[modulacion] = c.tolist()
+
     return jsonify({
         "snr_valores": snr_valores,
         "resultados": resultados,
         "n_simulaciones": n_sim,
         "t_critico": t_critico,
+        "papr_ccdf": {
+            "x_db": eje_papr,
+            "QPSK": papr_ccdf["QPSK"],
+            "16-QAM": papr_ccdf["16-QAM"],
+            "64-QAM": papr_ccdf["64-QAM"],
+            "n_simbolos": N_SIMBOLOS_PAPR,
+        },
     })
 
 

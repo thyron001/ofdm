@@ -332,7 +332,8 @@ function pintarResultados(j) {
 
   dibujarConstelacion(j.constelacion_tx, j.constelacion_rx, j.modulacion);
   dibujarMapaSC(j.mapa_subportadoras);
-  renderKV('kv-params-resumen', j.parametros, {
+  // Refrescar la tarjeta superior con todos los parámetros + tiempo
+  renderKV('kv-params', j.parametros, {
     tiempo_aire_s: j.tiempo_aire_s,
   });
   $('titulo-constelacion').textContent = `Constelación RX — ${j.modulacion}`;
@@ -481,6 +482,7 @@ function pintarMC(j) {
   $('modal-mc').style.display = 'flex';
   const ctx = $('montecarlo-canvas').getContext('2d');
   if (estado.graficoMC) estado.graficoMC.destroy();
+  if (estado.graficoPAPR) estado.graficoPAPR.destroy();
 
   const PISO = 1e-5;
   const colores = {
@@ -520,7 +522,7 @@ function pintarMC(j) {
           type: 'linear',
           title: { display: true, text: 'SNR (dB)', font: { weight: 700 } },
           ticks: { stepSize: 1 },
-          min: -0.5, max: 20.5,
+          min: -0.5, max: 15.5,
         },
         y: {
           type: 'logarithmic',
@@ -545,12 +547,54 @@ function pintarMC(j) {
     },
     plugins: [PLUGIN_ERROR_BARS],
   });
+
+  // === CCDF del PAPR ===
+  if (j.papr_ccdf) {
+    const ctxP = $('papr-canvas').getContext('2d');
+    const x = j.papr_ccdf.x_db;
+    const dsP = ['QPSK', '16-QAM', '64-QAM'].map((mod) => ({
+      label: mod,
+      data: j.papr_ccdf[mod].map((v, i) => ({ x: x[i], y: Math.max(v, 1e-4) })),
+      borderColor: colores[mod],
+      backgroundColor: colores[mod],
+      pointRadius: 0,
+      borderWidth: 2,
+      tension: 0.2,
+      fill: false,
+    }));
+    estado.graficoPAPR = new Chart(ctxP, {
+      type: 'line',
+      data: { datasets: dsP },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        animation: false,
+        scales: {
+          x: {
+            type: 'linear',
+            title: { display: true, text: 'PAPR_0 (dB)', font: { weight: 700 } },
+            min: 0, max: Math.max(...x),
+          },
+          y: {
+            type: 'logarithmic',
+            title: { display: true, text: 'Pr{PAPR > PAPR_0}', font: { weight: 700 } },
+            min: 1e-3, max: 1,
+          },
+        },
+        plugins: {
+          legend: { position: 'top', labels: { font: { weight: 700 } } },
+          title: {
+            display: true,
+            text: `CCDF del PAPR (${j.papr_ccdf.n_simbolos} símbolos OFDM por modulación)`,
+          },
+        },
+      },
+    });
+  }
 }
 
-function descargarMC() {
-  if (!estado.graficoMC) return;
-  // Renderiza con fondo blanco
-  const src = $('montecarlo-canvas');
+function descargarCanvas(canvasId, prefijo) {
+  const src = $(canvasId);
   const tmp = document.createElement('canvas');
   tmp.width = src.width; tmp.height = src.height;
   const tctx = tmp.getContext('2d');
@@ -558,9 +602,14 @@ function descargarMC() {
   tctx.fillRect(0, 0, tmp.width, tmp.height);
   tctx.drawImage(src, 0, 0);
   const link = document.createElement('a');
-  link.download = `montecarlo_ber_snr_${Date.now()}.png`;
+  link.download = `${prefijo}_${Date.now()}.png`;
   link.href = tmp.toDataURL('image/png');
   link.click();
+}
+
+function descargarMC() {
+  if (estado.graficoMC) descargarCanvas('montecarlo-canvas', 'montecarlo_ber_snr');
+  if (estado.graficoPAPR) descargarCanvas('papr-canvas', 'papr_ccdf');
 }
 
 // ===========================================================

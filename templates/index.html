@@ -146,17 +146,12 @@
             <div class="estado" id="titulo-constelacion" style="text-align:center; margin-top:6px"></div>
           </section>
 
-          <section class="tarjeta">
-            <h3>Mapa de Subportadoras</h3>
-            <canvas id="mapa-sc-canvas" width="800" height="120"></canvas>
-            <div class="estado" id="resumen-sc" style="margin-top:8px"></div>
-          </section>
-
-          <section class="tarjeta">
-            <h3>Parámetros de la Transmisión</h3>
-            <div id="kv-params-resumen" class="kv-grid"></div>
-          </section>
         </div>
+        <section class="tarjeta" style="margin-top:16px">
+          <h3>Mapa de Subportadoras</h3>
+          <canvas id="mapa-sc-canvas" width="1200" height="120"></canvas>
+          <div class="estado" id="resumen-sc" style="margin-top:8px"></div>
+        </section>
       </div>
 
     </main>
@@ -179,7 +174,10 @@
         </div>
       </div>
       <div class="modal-body">
+        <h3 style="margin:0 0 8px 0">BER vs SNR</h3>
         <canvas id="montecarlo-canvas"></canvas>
+        <h3 style="margin:24px 0 8px 0">CCDF del PAPR — Pr{PAPR &gt; X}</h3>
+        <canvas id="papr-canvas"></canvas>
       </div>
     </div>
   </div>
