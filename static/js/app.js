@@ -11,6 +11,7 @@ const estado = {
   uePos: { x: 250, y: 250 },
   arrastrando: false,
   graficoMC: null,
+  graficoPAPR: null,
   graficoConst: null,
 };
 
