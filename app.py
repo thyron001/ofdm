@@ -168,6 +168,14 @@ MODULACIONES = {
     "64-QAM": {"bits": 6, "mapear": qam64_mapear, "demapear": qam64_demapear},
 }
 
+# Esquemas de acceso múltiple.
+#  - OFDM   : sin precodificación (Práctica 1), 3 modulaciones.
+#  - SC-FDM : DFT-spread antes de la IFFT (Práctica 2, uplink LTE). Solo QPSK y 16-QAM.
+ESQUEMAS = {
+    "OFDM":   {"dft": False, "mods": ["QPSK", "16-QAM", "64-QAM"]},
+    "SC-FDM": {"dft": True,  "mods": ["QPSK", "16-QAM"]},
+}
+
 
 # =====================================================================
 # === FUNCIONES OFDM                                                 ===
@@ -328,10 +336,13 @@ def calcular_papr_simbolo(senal_tiempo: np.ndarray) -> float:
 
 
 def calcular_papr_ccdf(modulacion: str, params: Dict,
-                        n_simbolos: int, rng: np.random.Generator) -> Tuple[np.ndarray, np.ndarray]:
+                        n_simbolos: int, rng: np.random.Generator,
+                        usar_dft_spread: bool = False,
+                        eje_x: np.ndarray = None) -> Tuple[np.ndarray, np.ndarray]:
     """
-    Genera n_simbolos OFDM aleatorios para la modulación y devuelve
+    Genera n_simbolos (OFDM o SC-FDM) aleatorios para la modulación y devuelve
     (eje_x_dB, ccdf) donde ccdf[i] = Pr{PAPR > x_db[i]}.
+    Si se pasa eje_x se usa ese eje común (necesario para superponer curvas).
     """
     mod = MODULACIONES[modulacion]
     n_sc = params["n_sc"]
@@ -344,12 +355,14 @@ def calcular_papr_ccdf(modulacion: str, params: Dict,
     for i in range(n_simbolos):
         bits = rng.integers(0, 2, n_datos * bps, dtype=np.uint8)
         simbolos_qam = mod["mapear"](bits)
-        rejilla = insertar_pilotos(simbolos_qam, n_sc)
+        # OFDM (datos+pilotos) o SC-FDM (DFT-spread en bloque contiguo localizado)
+        rejilla = construir_rejilla_tx(simbolos_qam, n_sc, n_datos, usar_dft_spread)
         senal_t, _ = modulacion_ofdm(rejilla, n_fft, n_cp)
-        # quitar CP para PAPR sobre el símbolo OFDM puro
+        # quitar CP para PAPR sobre el símbolo puro
         paprs[i] = calcular_papr_simbolo(senal_t[n_cp:])
 
-    eje_x = np.linspace(0, max(15.0, float(np.max(paprs)) + 0.5), 80)
+    if eje_x is None:
+        eje_x = np.linspace(0, max(15.0, float(np.max(paprs)) + 0.5), 80)
     ccdf = np.array([np.mean(paprs > x) for x in eje_x])
     return eje_x, ccdf
 
@@ -363,15 +376,88 @@ def calcular_ber(bits_tx: np.ndarray, bits_rx: np.ndarray) -> float:
 
 
 # =====================================================================
+# === SC-FDM: PRECODIFICACIÓN DFT-SPREAD                            ===
+# =====================================================================
+# SC-FDM (SC-FDMA, uplink de LTE) = OFDM + una DFT de tamaño M aplicada al
+# bloque de símbolos de datos ANTES del mapeo a subportadoras y la IFFT.
+# En el receptor se aplica la IDFT (despread) tras la ecualización. Esto
+# reduce notablemente el PAPR manteniendo las mismas prestaciones de BER.
+
+def dft_spread(bloque_datos: np.ndarray) -> np.ndarray:
+    """DFT-spread unitaria de tamaño M = len(bloque_datos) (precoding SC-FDM)."""
+    m = len(bloque_datos)
+    if m == 0:
+        return bloque_datos
+    # Normalización unitaria: conserva la energía por subportadora (E_s = 1),
+    # de modo que el BER de SC-FDM sea comparable al de OFDM.
+    return np.fft.fft(bloque_datos) / np.sqrt(m)
+
+
+def idft_despread(bloque_freq: np.ndarray) -> np.ndarray:
+    """IDFT-despread unitaria (inversa exacta de dft_spread) en el receptor SC-FDM."""
+    m = len(bloque_freq)
+    if m == 0:
+        return bloque_freq
+    return np.fft.ifft(bloque_freq) * np.sqrt(m)
+
+
+def construir_rejilla_tx(bloque_datos: np.ndarray, n_sc: int, n_datos: int,
+                          usar_dft_spread: bool) -> np.ndarray:
+    """
+    Construye la rejilla de n_sc subportadoras del TX según el esquema:
+      - OFDM   : símbolos QAM en las posiciones de datos + pilotos intercalados (cada 12).
+      - SC-FDM : DFT-spread de los datos colocado en un BLOQUE CONTIGUO (mapeo localizado).
+                 No se intercalan pilotos constantes en el símbolo de datos: eso preserva la
+                 propiedad de portadora única y por tanto el bajo PAPR (en LTE las señales de
+                 referencia DMRS van en símbolos dedicados, justamente por esta razón).
+    """
+    if usar_dft_spread:
+        bloque_spread = dft_spread(np.asarray(bloque_datos, dtype=complex)[:n_datos])
+        rejilla = np.zeros(n_sc, dtype=complex)
+        rejilla[:len(bloque_spread)] = bloque_spread
+        return rejilla
+    return insertar_pilotos(bloque_datos, n_sc)
+
+
+def forma_onda_simbolo(simbolos_qam_bloque: np.ndarray, params: Dict,
+                        usar_dft_spread: bool, max_pts: int = 512) -> Tuple[list, float]:
+    """
+    Genera UN símbolo (OFDM o SC-FDM) a partir de un bloque de símbolos QAM y
+    devuelve (envolvente |x(t)| submuestreada, PAPR en dB). Sirve para comparar
+    visualmente la forma de onda en el tiempo de OFDM vs SC-FDM con los mismos datos.
+    """
+    n_sc = params["n_sc"]
+    n_fft = params["n_fft"]
+    n_cp = params["n_cp"]
+    n_datos = params["n_datos"]
+
+    bloque = np.asarray(simbolos_qam_bloque, dtype=complex)[:n_datos]
+    if len(bloque) < n_datos:
+        bloque = np.concatenate([bloque, np.zeros(n_datos - len(bloque), dtype=complex)])
+    rejilla = construir_rejilla_tx(bloque, n_sc, n_datos, usar_dft_spread)
+    senal_t, _ = modulacion_ofdm(rejilla, n_fft, n_cp)
+    senal = senal_t[n_cp:]  # símbolo puro, sin CP
+    papr = calcular_papr_simbolo(senal)
+    envolvente = np.abs(senal)
+    if len(envolvente) > max_pts:
+        idx = np.linspace(0, len(envolvente) - 1, max_pts).astype(int)
+        envolvente = envolvente[idx]
+    return envolvente.tolist(), float(papr)
+
+
+# =====================================================================
 # === CADENA TX/RX COMPLETA                                          ===
 # =====================================================================
 
 # Freddy
 def cadena_tx_rx(bits_tx: np.ndarray, modulacion: str, params: Dict,
                   snr_db: float, rng: np.random.Generator,
-                  capturar_constelaciones: bool = False) -> Dict:
+                  capturar_constelaciones: bool = False,
+                  usar_dft_spread: bool = False) -> Dict:
     """
     Ejecuta TX -> Canal Pedestrian A -> AWGN -> RX.
+    Con usar_dft_spread=True la cadena es SC-FDM (DFT-spread + IDFT-despread);
+    con False es OFDM clásico.
     Retorna dict con bits_rx, ber y (opcional) constelaciones tx/rx.
     """
     mod = MODULACIONES[modulacion]
@@ -404,7 +490,8 @@ def cadena_tx_rx(bits_tx: np.ndarray, modulacion: str, params: Dict,
     _, indices_datos_sc = indices_pilotos_datos(n_sc)
     for i in range(n_ofdm):
         bloque_datos = simbolos_qam[i * n_datos:(i + 1) * n_datos]
-        rejilla = insertar_pilotos(bloque_datos, n_sc)
+        # TX: OFDM (datos+pilotos) o SC-FDM (DFT-spread en bloque contiguo localizado)
+        rejilla = construir_rejilla_tx(bloque_datos, n_sc, n_datos, usar_dft_spread)
         senal_t, indices_fft = modulacion_ofdm(rejilla, n_fft, n_cp)
 
         # === Canal Pedestrian A: aplicamos en frecuencia ===
@@ -418,7 +505,11 @@ def cadena_tx_rx(bits_tx: np.ndarray, modulacion: str, params: Dict,
         # === RX con ecualización Zero-Forcing (canal conocido) ===
         rejilla_rx = demodulacion_ofdm(senal_rx, indices_fft, n_fft, n_cp, n_sc)
         rejilla_eq = rejilla_rx / H
-        datos_rx = rejilla_eq[indices_datos_sc]
+        if usar_dft_spread:
+            # SC-FDM: extraer el bloque contiguo de datos e IDFT-despread
+            datos_rx = idft_despread(rejilla_eq[:n_datos])
+        else:
+            datos_rx = rejilla_eq[indices_datos_sc]
         if capturar_constelaciones:
             simbolos_rx_datos.append(datos_rx)
 
@@ -542,6 +633,13 @@ def simular():
     except KeyError as e:
         return jsonify({"error": f"Falta campo {e}"}), 400
 
+    esquema = data.get("esquema", "OFDM")
+    if esquema not in ESQUEMAS:
+        return jsonify({"error": f"Esquema no válido: {esquema}"}), 400
+    if modulacion not in ESQUEMAS[esquema]["mods"]:
+        return jsonify({"error": f"{modulacion} no está disponible en {esquema}"}), 400
+    usar_dft = ESQUEMAS[esquema]["dft"]
+
     if ESTADO["bits"] is None:
         return jsonify({"error": "Primero suba una imagen"}), 400
 
@@ -552,8 +650,18 @@ def simular():
     rng = np.random.default_rng()
     t0 = time.perf_counter()
     resultado = cadena_tx_rx(bits_tx, modulacion, params, snr, rng,
-                              capturar_constelaciones=True)
+                              capturar_constelaciones=True, usar_dft_spread=usar_dft)
     tiempo_computo_s = time.perf_counter() - t0
+
+    # Comparación de forma de onda |x(t)|: un símbolo representativo generado con datos
+    # ALEATORIOS (los MISMOS para ambos esquemas) para evidenciar el menor PAPR de SC-FDM.
+    # Se usan datos aleatorios (no el bloque de imagen, que es muy estructurado y daría un
+    # PAPR atípico) de forma coherente con la metodología de la CCDF del PAPR.
+    n_bits_bloque = params["n_datos"] * bps
+    bits_bloque = rng.integers(0, 2, n_bits_bloque, dtype=np.uint8)
+    simbolos_bloque = MODULACIONES[modulacion]["mapear"](bits_bloque)
+    env_ofdm, papr_ofdm = forma_onda_simbolo(simbolos_bloque, params, usar_dft_spread=False)
+    env_scfdm, papr_scfdm = forma_onda_simbolo(simbolos_bloque, params, usar_dft_spread=True)
 
     # Tiempo "real" de transmisión OTA: N_OFDM × duración símbolo
     tiempo_aire_s = resultado["n_simbolos_ofdm"] * params["duracion_simbolo_us"] * 1e-6
@@ -572,10 +680,20 @@ def simular():
     c_tx = submuestrear(resultado["constelacion_tx"])
     c_rx = submuestrear(resultado["constelacion_rx"])
 
-    pilotos_idx, datos_idx = indices_pilotos_datos(params["n_sc"])
+    # Mapa de subportadoras según el esquema:
+    #  - OFDM   : datos + pilotos intercalados (cada 12).
+    #  - SC-FDM : bloque CONTIGUO de datos (localizado) + subportadoras de guarda; sin pilotos.
+    if usar_dft:
+        datos_idx = np.arange(params["n_datos"])
+        pilotos_idx = np.array([], dtype=int)
+        guarda_idx = np.arange(params["n_datos"], params["n_sc"])
+    else:
+        pilotos_idx, datos_idx = indices_pilotos_datos(params["n_sc"])
+        guarda_idx = np.array([], dtype=int)
 
     return jsonify({
         "ber": resultado["ber"],
+        "esquema": esquema,
         "bits_transmitidos": int(len(bits_tx)),
         "bits_erroneos": int(round(resultado["ber"] * len(bits_tx))),
         "modulacion": modulacion,
@@ -587,10 +705,17 @@ def simular():
         "constelacion_rx": {"real": c_rx.real.tolist(), "imag": c_rx.imag.tolist()},
         "mapa_subportadoras": {
             "total": int(params["n_sc"]),
-            "pilotos": int(params["n_pilotos"]),
-            "datos": int(params["n_datos"]),
+            "pilotos": int(len(pilotos_idx)),
+            "datos": int(len(datos_idx)),
+            "guarda": int(len(guarda_idx)),
+            "tipo_mapeo": "localizado" if usar_dft else "distribuido",
             "indices_pilotos": pilotos_idx.tolist(),
             "indices_datos": datos_idx.tolist(),
+            "indices_guarda": guarda_idx.tolist(),
+        },
+        "forma_onda": {
+            "ofdm": {"envolvente": env_ofdm, "papr_db": papr_ofdm},
+            "scfdm": {"envolvente": env_scfdm, "papr_db": papr_scfdm},
         },
         "parametros": params,
         "tiempo_aire_s": tiempo_aire_s,
@@ -601,6 +726,13 @@ def simular():
 # Tyrone
 @app.route("/montecarlo", methods=["POST"])
 def montecarlo():
+    """
+    Simulación Monte Carlo. Acepta `esquemas` (lista). Devuelve series planas:
+      - esquemas=["OFDM"]            -> 3 curvas (Práctica 1, pestaña OFDM)
+      - esquemas=["OFDM","SC-FDM"]   -> 5 curvas combinadas (Práctica 2, pestaña SC-FDM)
+    Cada serie lleva su esquema y modulación para que el frontend la pinte
+    (color=modulación, estilo=esquema).
+    """
     data = request.get_json(force=True)
     try:
         bw = float(data["bw_mhz"])
@@ -609,8 +741,15 @@ def montecarlo():
     except KeyError as e:
         return jsonify({"error": f"Falta campo {e}"}), 400
 
-    # Monte Carlo usa bits aleatorios (independiente de la imagen)
-    N_BITS_MC = 50000
+    # Esquemas a simular (validados contra ESQUEMAS)
+    esquemas = [e for e in data.get("esquemas", ["OFDM"]) if e in ESQUEMAS]
+    if not esquemas:
+        esquemas = ["OFDM"]
+    combinado = len(esquemas) > 1
+
+    # En modo combinado se reduce la carga (5×16×10 corridas) para que sea ágil
+    N_BITS_MC = 20000 if combinado else 50000
+    N_SIMBOLOS_PAPR = 1000 if combinado else 1500
     snr_valores = list(range(0, 16))
     n_sim = 10
     rng = np.random.default_rng()
@@ -618,55 +757,61 @@ def montecarlo():
     # Valor crítico T-Student 95%, n-1 = 9 gl
     t_critico = float(t_student.ppf(0.975, df=n_sim - 1))
 
-    resultados = {}
-    for modulacion in ["QPSK", "16-QAM", "64-QAM"]:
-        bps = MODULACIONES[modulacion]["bits"]
-        params = calcular_parametros_ofdm(bw, df, cp, N_BITS_MC, bps)
-        ber_prom = []
-        ic_inf = []
-        ic_sup = []
-        for snr in snr_valores:
-            bers = []
-            for _ in range(n_sim):
-                bits_aleatorios = rng.integers(0, 2, N_BITS_MC, dtype=np.uint8)
-                r = cadena_tx_rx(bits_aleatorios, modulacion, params, snr, rng,
-                                  capturar_constelaciones=False)
-                bers.append(r["ber"])
-            bers = np.array(bers)
-            mu = float(np.mean(bers))
-            sd = float(np.std(bers, ddof=1)) if n_sim > 1 else 0.0
-            margen = t_critico * sd / np.sqrt(n_sim)
-            ber_prom.append(mu)
-            ic_inf.append(max(mu - margen, 1e-6))
-            ic_sup.append(mu + margen)
-        resultados[modulacion] = {
-            "ber_promedio": ber_prom,
-            "ic_inferior": ic_inf,
-            "ic_superior": ic_sup,
-        }
+    # === BER vs SNR (una serie por esquema×modulación) ===
+    series_ber = []
+    for esquema in esquemas:
+        usar_dft = ESQUEMAS[esquema]["dft"]
+        for modulacion in ESQUEMAS[esquema]["mods"]:
+            bps = MODULACIONES[modulacion]["bits"]
+            params = calcular_parametros_ofdm(bw, df, cp, N_BITS_MC, bps)
+            ber_prom, ic_inf, ic_sup = [], [], []
+            for snr in snr_valores:
+                bers = []
+                for _ in range(n_sim):
+                    bits_aleatorios = rng.integers(0, 2, N_BITS_MC, dtype=np.uint8)
+                    r = cadena_tx_rx(bits_aleatorios, modulacion, params, snr, rng,
+                                      capturar_constelaciones=False, usar_dft_spread=usar_dft)
+                    bers.append(r["ber"])
+                bers = np.array(bers)
+                mu = float(np.mean(bers))
+                sd = float(np.std(bers, ddof=1)) if n_sim > 1 else 0.0
+                margen = t_critico * sd / np.sqrt(n_sim)
+                ber_prom.append(mu)
+                ic_inf.append(max(mu - margen, 1e-6))
+                ic_sup.append(mu + margen)
+            series_ber.append({
+                "esquema": esquema,
+                "modulacion": modulacion,
+                "ber_promedio": ber_prom,
+                "ic_inferior": ic_inf,
+                "ic_superior": ic_sup,
+            })
 
-    # === PAPR CCDF (independiente del SNR) ===
-    N_SIMBOLOS_PAPR = 1500
-    papr_ccdf = {}
-    eje_papr = None
-    for modulacion in ["QPSK", "16-QAM", "64-QAM"]:
-        bps = MODULACIONES[modulacion]["bits"]
-        params = calcular_parametros_ofdm(bw, df, cp, N_BITS_MC, bps)
-        x, c = calcular_papr_ccdf(modulacion, params, N_SIMBOLOS_PAPR, rng)
-        if eje_papr is None:
-            eje_papr = x.tolist()
-        papr_ccdf[modulacion] = c.tolist()
+    # === CCDF del PAPR (independiente del SNR), sobre un eje común ===
+    eje_comun = np.linspace(0, 15, 80)
+    series_papr = []
+    for esquema in esquemas:
+        usar_dft = ESQUEMAS[esquema]["dft"]
+        for modulacion in ESQUEMAS[esquema]["mods"]:
+            bps = MODULACIONES[modulacion]["bits"]
+            params = calcular_parametros_ofdm(bw, df, cp, N_BITS_MC, bps)
+            _, c = calcular_papr_ccdf(modulacion, params, N_SIMBOLOS_PAPR, rng,
+                                       usar_dft_spread=usar_dft, eje_x=eje_comun)
+            series_papr.append({
+                "esquema": esquema,
+                "modulacion": modulacion,
+                "ccdf": c.tolist(),
+            })
 
     return jsonify({
         "snr_valores": snr_valores,
-        "resultados": resultados,
         "n_simulaciones": n_sim,
         "t_critico": t_critico,
-        "papr_ccdf": {
-            "x_db": eje_papr,
-            "QPSK": papr_ccdf["QPSK"],
-            "16-QAM": papr_ccdf["16-QAM"],
-            "64-QAM": papr_ccdf["64-QAM"],
+        "n_bits_mc": N_BITS_MC,
+        "series_ber": series_ber,
+        "papr": {
+            "x_db": eje_comun.tolist(),
+            "series": series_papr,
             "n_simbolos": N_SIMBOLOS_PAPR,
         },
     })

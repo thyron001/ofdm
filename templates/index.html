@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Simulador OFDM-LTE</title>
+  <title>Simulador OFDM / SC-FDM — LTE</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
@@ -12,20 +12,28 @@
 </head>
 <body>
   <header class="header">
-    <h1>Simulador OFDM-LTE</h1>
-    <div class="sub">Transmisión, canal Pedestrian A (ITU-R M.1225), AWGN y análisis Monte Carlo</div>
+    <h1>Simulador OFDM / SC-FDM — LTE</h1>
+    <div class="sub">Transmisión de imagen, canal Pedestrian A (ITU-R M.1225), AWGN, BER y análisis Monte Carlo (PAPR)</div>
   </header>
 
+  <!-- ============ PESTAÑAS ============ -->
+  <nav class="tabs">
+    <button class="tab-btn activa" data-tab="ofdm">OFDM</button>
+    <button class="tab-btn" data-tab="scfdm">SC-FDM</button>
+  </nav>
+
+  <!-- ===================================================================== -->
+  <!-- ============ PANEL OFDM (Práctica 1) ============ -->
+  <!-- ===================================================================== -->
+  <div class="tab-panel activa" id="panel-ofdm">
   <div class="contenedor">
 
-    <!-- ============ SIDEBAR ============ -->
     <aside class="sidebar">
-
       <section class="tarjeta">
         <h2>Configuración OFDM</h2>
         <div class="campo">
-          <label class="campo-label" for="bw">Ancho de Banda (BW)</label>
-          <select id="bw">
+          <label class="campo-label" for="ofdm-bw">Ancho de Banda (BW)</label>
+          <select id="ofdm-bw">
             <option value="1.4">1.4 MHz</option>
             <option value="3">3 MHz</option>
             <option value="5" selected>5 MHz</option>
@@ -35,20 +43,20 @@
           </select>
         </div>
         <div class="campo">
-          <label class="campo-label" for="df">Espaciamiento Δf</label>
-          <select id="df">
+          <label class="campo-label" for="ofdm-df">Espaciamiento Δf</label>
+          <select id="ofdm-df">
             <option value="15" selected>15 kHz</option>
             <option value="7.5">7.5 kHz</option>
           </select>
         </div>
         <div class="campo">
-          <label class="campo-label" for="cp">Prefijo Cíclico</label>
-          <select id="cp">
+          <label class="campo-label" for="ofdm-cp">Prefijo Cíclico</label>
+          <select id="ofdm-cp">
             <option value="normal">Normal (4.7 µs)</option>
             <option value="extendido">Extendido (16.67 µs)</option>
           </select>
         </div>
-        <div id="aviso-combinacion" class="aviso" style="display:none">
+        <div id="ofdm-aviso-combinacion" class="aviso" style="display:none">
           Δf = 7.5 kHz no es compatible con BW &lt; 5 MHz.
         </div>
       </section>
@@ -56,10 +64,10 @@
       <section class="tarjeta">
         <h2>Canal y Ruido</h2>
         <div class="campo">
-          <label class="campo-label" for="snr">SNR (dB)</label>
+          <label class="campo-label" for="ofdm-snr">SNR (dB)</label>
           <div class="slider-row">
-            <input type="range" id="snr" min="0" max="100" step="1" value="20" />
-            <input type="number" id="snr-num" min="0" max="100" step="1" value="20" />
+            <input type="range" id="ofdm-snr" min="0" max="100" step="1" value="20" />
+            <input type="number" id="ofdm-snr-num" min="0" max="100" step="1" value="20" />
           </div>
         </div>
         <div class="campo">
@@ -82,102 +90,286 @@
       <section class="tarjeta">
         <h2>Imagen</h2>
         <div class="campo">
-          <label class="campo-label" for="archivo-imagen">Subir imagen (.png, .jpg, .bmp)</label>
-          <input type="file" id="archivo-imagen" accept=".png,.jpg,.jpeg,.bmp" />
+          <label class="campo-label" for="ofdm-archivo-imagen">Subir imagen (.png, .jpg, .bmp)</label>
+          <input type="file" id="ofdm-archivo-imagen" accept=".png,.jpg,.jpeg,.bmp" />
         </div>
-        <img id="preview-imagen" alt="Preview" />
-        <div id="info-imagen" class="estado"></div>
+        <img id="ofdm-preview-imagen" class="preview-imagen" alt="Preview" />
+        <div id="ofdm-info-imagen" class="estado"></div>
       </section>
     </aside>
 
-    <!-- ============ PRINCIPAL ============ -->
     <main class="principal">
-
-      <!-- Canvas cobertura -->
       <section class="tarjeta">
         <h2>Mapa de Cobertura</h2>
         <div class="cobertura-cont">
-          <canvas id="canvas-cobertura" width="500" height="500"></canvas>
+          <canvas id="ofdm-canvas-cobertura" class="canvas-cobertura" width="500" height="500"></canvas>
           <div class="info-cobertura">
-            <span>Distancia: <strong id="distancia-ue">0</strong> m</span>
+            <span>Distancia: <strong id="ofdm-distancia-ue">0</strong> m</span>
             <span>Modulación activa:
-              <span id="badge-modulacion" class="badge badge-verde">64-QAM</span>
+              <span id="ofdm-badge-modulacion" class="badge badge-verde">64-QAM</span>
             </span>
           </div>
         </div>
         <div class="acciones" style="margin-top:14px; justify-content:center">
-          <button id="btn-simular" class="boton boton-primario">Simular Transmisión</button>
-          <button id="btn-mc" class="boton boton-exito">Simulación Monte Carlo</button>
+          <button id="ofdm-btn-simular" class="boton boton-primario">Simular Transmisión</button>
+          <button id="ofdm-btn-mc" class="boton boton-exito">Simulación Monte Carlo</button>
         </div>
-        <div id="estado-sim" class="estado" style="text-align:center; margin-top:10px"></div>
+        <div id="ofdm-estado-sim" class="estado" style="text-align:center; margin-top:10px"></div>
       </section>
 
-      <!-- Parámetros calculados -->
       <section class="tarjeta">
         <h2>Parámetros Calculados</h2>
-        <div id="kv-params" class="kv-grid"></div>
+        <div id="ofdm-kv-params" class="kv-grid"></div>
       </section>
 
-      <!-- Resultados simulación -->
-      <div id="zona-resultados" style="display:none">
+      <div id="ofdm-zona-resultados" style="display:none">
         <div class="grid-resultados">
           <section class="tarjeta">
             <h3>Imágenes TX / RX</h3>
             <div class="img-comparativa">
-              <figure>
-                <img id="img-tx" alt="Original" />
-                <figcaption>Original</figcaption>
-              </figure>
-              <figure>
-                <img id="img-rx" alt="Recuperada" />
-                <figcaption>Recuperada</figcaption>
-              </figure>
+              <figure><img id="ofdm-img-tx" alt="Original" /><figcaption>Original</figcaption></figure>
+              <figure><img id="ofdm-img-rx" alt="Recuperada" /><figcaption>Recuperada</figcaption></figure>
             </div>
             <div class="ber-grande">
               <div class="lbl">BER</div>
-              <div class="valor" id="ber-valor">—</div>
-              <div class="lbl" id="ber-detalle"></div>
+              <div class="valor" id="ofdm-ber-valor">—</div>
+              <div class="lbl" id="ofdm-ber-detalle"></div>
             </div>
           </section>
-
           <section class="tarjeta">
             <h3>Constelación RX</h3>
-            <canvas id="constelacion-canvas" width="400" height="400"></canvas>
-            <div class="estado" id="titulo-constelacion" style="text-align:center; margin-top:6px"></div>
+            <canvas id="ofdm-constelacion-canvas" class="constelacion-canvas" width="400" height="400"></canvas>
+            <div class="estado" id="ofdm-titulo-constelacion" style="text-align:center; margin-top:6px"></div>
           </section>
-
         </div>
         <section class="tarjeta" style="margin-top:16px">
           <h3>Mapa de Subportadoras</h3>
-          <canvas id="mapa-sc-canvas" width="1200" height="120"></canvas>
-          <div class="estado" id="resumen-sc" style="margin-top:8px"></div>
+          <canvas id="ofdm-mapa-sc-canvas" class="mapa-sc-canvas" width="1200" height="120"></canvas>
+          <div class="estado" id="ofdm-resumen-sc" style="margin-top:8px"></div>
         </section>
       </div>
-
     </main>
   </div>
+  </div>
 
-  <!-- Lightbox para imágenes -->
+  <!-- ===================================================================== -->
+  <!-- ============ PANEL SC-FDM (Práctica 2) ============ -->
+  <!-- ===================================================================== -->
+  <div class="tab-panel" id="panel-scfdm">
+  <div class="contenedor">
+
+    <aside class="sidebar">
+      <section class="tarjeta">
+        <h2>Configuración SC-FDM</h2>
+        <div class="campo">
+          <label class="campo-label" for="scfdm-bw">Ancho de Banda (BW)</label>
+          <select id="scfdm-bw">
+            <option value="1.4">1.4 MHz</option>
+            <option value="3">3 MHz</option>
+            <option value="5" selected>5 MHz</option>
+            <option value="10">10 MHz</option>
+            <option value="15">15 MHz</option>
+            <option value="20">20 MHz</option>
+          </select>
+        </div>
+        <div class="campo">
+          <label class="campo-label" for="scfdm-df">Espaciamiento Δf</label>
+          <select id="scfdm-df">
+            <option value="15" selected>15 kHz</option>
+            <option value="7.5">7.5 kHz</option>
+          </select>
+        </div>
+        <div class="campo">
+          <label class="campo-label" for="scfdm-cp">Prefijo Cíclico</label>
+          <select id="scfdm-cp">
+            <option value="normal">Normal (4.7 µs)</option>
+            <option value="extendido">Extendido (16.67 µs)</option>
+          </select>
+        </div>
+        <div id="scfdm-aviso-combinacion" class="aviso" style="display:none">
+          Δf = 7.5 kHz no es compatible con BW &lt; 5 MHz.
+        </div>
+      </section>
+
+      <section class="tarjeta">
+        <h2>Canal y Ruido</h2>
+        <div class="campo">
+          <label class="campo-label" for="scfdm-snr">SNR (dB)</label>
+          <div class="slider-row">
+            <input type="range" id="scfdm-snr" min="0" max="100" step="1" value="20" />
+            <input type="number" id="scfdm-snr-num" min="0" max="100" step="1" value="20" />
+          </div>
+        </div>
+        <div class="campo">
+          <label class="campo-label">Modelo de Canal</label>
+          <span class="badge badge-azul">Pedestrian A (ITU-R M.1225)</span>
+        </div>
+        <table>
+          <thead>
+            <tr><th>Tap</th><th>Retardo (ns)</th><th>Potencia (dB)</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>1</td><td>0</td><td>0</td></tr>
+            <tr><td>2</td><td>110</td><td>-9.7</td></tr>
+            <tr><td>3</td><td>190</td><td>-19.2</td></tr>
+            <tr><td>4</td><td>410</td><td>-22.8</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section class="tarjeta">
+        <h2>Imagen</h2>
+        <div class="campo">
+          <label class="campo-label" for="scfdm-archivo-imagen">Subir imagen (.png, .jpg, .bmp)</label>
+          <input type="file" id="scfdm-archivo-imagen" accept=".png,.jpg,.jpeg,.bmp" />
+        </div>
+        <img id="scfdm-preview-imagen" class="preview-imagen" alt="Preview" />
+        <div id="scfdm-info-imagen" class="estado"></div>
+      </section>
+    </aside>
+
+    <main class="principal">
+
+      <!-- Diagrama de bloques DFT-spread -->
+      <section class="tarjeta">
+        <h2>Cadena SC-FDM (DFT-spread OFDM)</h2>
+        <p class="nota">
+          SC-FDM = OFDM con una <strong>DFT de tamaño M</strong> que «esparce» los símbolos de datos
+          antes de la IFFT, y la <strong>IDFT</strong> correspondiente en el receptor. Esto convierte la
+          señal en cuasi-portadora-única y reduce notablemente el <strong>PAPR</strong>, manteniendo el
+          mismo BER. Solo se usan <strong>QPSK</strong> y <strong>16-QAM</strong>.
+        </p>
+        <div class="diagrama">
+          <div class="bloque">Imagen<br>→ Bits</div>
+          <span class="flecha">→</span>
+          <div class="bloque">Mapeo<br>QAM</div>
+          <span class="flecha">→</span>
+          <div class="bloque resaltado">DFT<br>(M)</div>
+          <span class="flecha">→</span>
+          <div class="bloque">Mapeo<br>localizado</div>
+          <span class="flecha">→</span>
+          <div class="bloque">IFFT (N)<br>+ CP</div>
+          <span class="flecha">→</span>
+          <div class="bloque canal">Canal<br>+ AWGN</div>
+          <span class="flecha">→</span>
+          <div class="bloque">Quita CP<br>+ FFT</div>
+          <span class="flecha">→</span>
+          <div class="bloque">Ecualiz.<br>ZF</div>
+          <span class="flecha">→</span>
+          <div class="bloque resaltado">IDFT<br>(M)</div>
+          <span class="flecha">→</span>
+          <div class="bloque">Demapeo<br>→ Imagen</div>
+        </div>
+        <div class="estado" style="margin-top:8px">
+          Bloques resaltados = precodificación/decodificación DFT que distingue SC-FDM de OFDM.
+        </div>
+      </section>
+
+      <section class="tarjeta">
+        <h2>Mapa de Cobertura</h2>
+        <div class="cobertura-cont">
+          <canvas id="scfdm-canvas-cobertura" class="canvas-cobertura" width="500" height="500"></canvas>
+          <div class="info-cobertura">
+            <span>Distancia: <strong id="scfdm-distancia-ue">0</strong> m</span>
+            <span>Modulación activa:
+              <span id="scfdm-badge-modulacion" class="badge badge-azul">16-QAM</span>
+            </span>
+          </div>
+        </div>
+        <div class="acciones" style="margin-top:14px; justify-content:center">
+          <button id="scfdm-btn-simular" class="boton boton-primario">Simular Transmisión</button>
+          <button id="scfdm-btn-mc" class="boton boton-exito">Monte Carlo (OFDM vs SC-FDM)</button>
+        </div>
+        <div id="scfdm-estado-sim" class="estado" style="text-align:center; margin-top:10px"></div>
+      </section>
+
+      <section class="tarjeta">
+        <h2>Parámetros Calculados</h2>
+        <div id="scfdm-kv-params" class="kv-grid"></div>
+      </section>
+
+      <div id="scfdm-zona-resultados" style="display:none">
+        <div class="grid-resultados">
+          <section class="tarjeta">
+            <h3>Imágenes TX / RX</h3>
+            <div class="img-comparativa">
+              <figure><img id="scfdm-img-tx" alt="Original" /><figcaption>Original</figcaption></figure>
+              <figure><img id="scfdm-img-rx" alt="Recuperada" /><figcaption>Recuperada</figcaption></figure>
+            </div>
+            <div class="ber-grande">
+              <div class="lbl">BER</div>
+              <div class="valor" id="scfdm-ber-valor">—</div>
+              <div class="lbl" id="scfdm-ber-detalle"></div>
+            </div>
+          </section>
+          <section class="tarjeta">
+            <h3>Constelación RX</h3>
+            <canvas id="scfdm-constelacion-canvas" class="constelacion-canvas" width="400" height="400"></canvas>
+            <div class="estado" id="scfdm-titulo-constelacion" style="text-align:center; margin-top:6px"></div>
+          </section>
+        </div>
+
+        <!-- Comparación de forma de onda en el tiempo -->
+        <section class="tarjeta" style="margin-top:16px">
+          <h3>Forma de Onda |x(t)| — OFDM vs SC-FDM (mismos datos)</h3>
+          <canvas id="scfdm-forma-onda-canvas" class="forma-onda-canvas" width="1200" height="280"></canvas>
+          <div class="estado" id="scfdm-resumen-papr" style="margin-top:8px"></div>
+        </section>
+
+        <section class="tarjeta" style="margin-top:16px">
+          <h3>Mapa de Subportadoras</h3>
+          <canvas id="scfdm-mapa-sc-canvas" class="mapa-sc-canvas" width="1200" height="120"></canvas>
+          <div class="estado" id="scfdm-resumen-sc" style="margin-top:8px"></div>
+        </section>
+      </div>
+    </main>
+  </div>
+  </div>
+
+  <!-- Lightbox compartido -->
   <div id="lightbox" class="lightbox" style="display:none">
     <span class="lightbox-cerrar">&times;</span>
     <img id="lightbox-img" alt="" />
   </div>
 
-  <!-- Modal Monte Carlo -->
-  <div id="modal-mc" class="modal" style="display:none">
+  <!-- Modal Monte Carlo OFDM -->
+  <div id="ofdm-modal-mc" class="modal" style="display:none">
     <div class="modal-contenido">
       <div class="modal-header">
-        <h2>BER vs SNR — Monte Carlo (10 corridas, IC 95% T-Student)</h2>
+        <h2>OFDM — Monte Carlo (10 corridas, IC 95% T-Student)</h2>
         <div class="modal-acciones">
-          <button id="btn-descargar-mc" class="boton boton-exito">Descargar PNG</button>
-          <button id="btn-cerrar-mc" class="boton boton-primario">Cerrar</button>
+          <button id="ofdm-btn-descargar-mc" class="boton boton-exito">Descargar PNG</button>
+          <button id="ofdm-btn-cerrar-mc" class="boton boton-primario">Cerrar</button>
         </div>
       </div>
       <div class="modal-body">
         <h3 style="margin:0 0 8px 0">BER vs SNR</h3>
-        <canvas id="montecarlo-canvas"></canvas>
+        <canvas id="ofdm-montecarlo-canvas"></canvas>
         <h3 style="margin:24px 0 8px 0">CCDF del PAPR — Pr{PAPR &gt; X}</h3>
-        <canvas id="papr-canvas"></canvas>
+        <canvas id="ofdm-papr-canvas"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal Monte Carlo SC-FDM (combinado) -->
+  <div id="scfdm-modal-mc" class="modal" style="display:none">
+    <div class="modal-contenido">
+      <div class="modal-header">
+        <h2>Comparación OFDM vs SC-FDM — Monte Carlo (10 corridas, IC 95%)</h2>
+        <div class="modal-acciones">
+          <button id="scfdm-btn-descargar-mc" class="boton boton-exito">Descargar PNG</button>
+          <button id="scfdm-btn-cerrar-mc" class="boton boton-primario">Cerrar</button>
+        </div>
+      </div>
+      <div class="modal-body">
+        <div class="estado" style="margin-bottom:10px">
+          Líneas <strong>continuas</strong> = OFDM (3 modulaciones) · líneas <strong>discontinuas</strong> = SC-FDM (2 modulaciones).
+          El color identifica la modulación.
+        </div>
+        <h3 style="margin:0 0 8px 0">BER vs SNR (5 curvas)</h3>
+        <canvas id="scfdm-montecarlo-canvas"></canvas>
+        <h3 style="margin:24px 0 8px 0">CCDF del PAPR — Pr{PAPR &gt; X} (5 curvas)</h3>
+        <canvas id="scfdm-papr-canvas"></canvas>
       </div>
     </div>
   </div>
