@@ -33,32 +33,41 @@ function formatearTiempo(s) {
   return s.toFixed(3) + ' s';
 }
 
-// Plugin Chart.js: barras de error (IC 95%) en cada punto
+// Plugin Chart.js: barras de error (IC 95%) en cada punto.
+// Para distinguir OFDM y SC-FDM de la MISMA modulación (mismo color), cuando el gráfico
+// mezcla ambos esquemas se usan estilos distintos y un pequeño desplazamiento horizontal:
+//   - OFDM   : barra sólida, gruesa, topes anchos, desplazada a la izquierda.
+//   - SC-FDM : barra discontinua, fina, topes angostos, desplazada a la derecha.
 const PLUGIN_ERROR_BARS = {
   id: 'errorBars',
   afterDatasetsDraw(chart) {
     const { ctx, scales: { x, y } } = chart;
+    const mixto = chart.data.datasets.some((d) => d.esquema === 'SC-FDM') &&
+                  chart.data.datasets.some((d) => d.esquema === 'OFDM');
     chart.data.datasets.forEach((ds, idx) => {
       if (!ds.errorBars) return;
       const meta = chart.getDatasetMeta(idx);
       if (meta.hidden) return;
+      const esSC = ds.esquema === 'SC-FDM';
       ctx.save();
       ctx.strokeStyle = ds.borderColor;
-      ctx.lineWidth = 1.8;
+      ctx.lineWidth = esSC ? 1.3 : 2.3;
+      ctx.setLineDash(esSC ? [4, 3] : []);
+      const off = mixto ? (esSC ? 4 : -4) : 0;   // dodge solo si hay ambos esquemas
+      const w = esSC ? 4 : 8;                      // ancho de los topes
       ds.data.forEach((pt, i) => {
         const eb = ds.errorBars[i];
         if (!eb) return;
-        const px = x.getPixelForValue(pt.x);
+        const px = x.getPixelForValue(pt.x) + off;
         const pyMin = y.getPixelForValue(Math.max(eb.lo, y.min));
         const pyMax = y.getPixelForValue(Math.max(eb.hi, y.min));
-        const w = 6;
         ctx.beginPath();
         ctx.moveTo(px, pyMin); ctx.lineTo(px, pyMax);
         ctx.moveTo(px - w, pyMin); ctx.lineTo(px + w, pyMin);
         ctx.moveTo(px - w, pyMax); ctx.lineTo(px + w, pyMax);
         ctx.stroke();
       });
-      ctx.restore();
+      ctx.restore();   // restaura lineDash/lineWidth
     });
   },
 };
@@ -506,6 +515,7 @@ function crearPanel(cfg) {
     // BER vs SNR
     const datasets = j.series_ber.map((s) => ({
       label: `${s.esquema} ${s.modulacion}`,
+      esquema: s.esquema,
       data: s.ber_promedio.map((v, i) => ({ x: j.snr_valores[i], y: Math.max(v, PISO) })),
       errorBars: s.ber_promedio.map((_, i) => ({
         lo: Math.max(s.ic_inferior[i], PISO), hi: Math.max(s.ic_superior[i], PISO),
