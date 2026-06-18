@@ -20,6 +20,7 @@
   <nav class="tabs">
     <button class="tab-btn activa" data-tab="ofdm">OFDM</button>
     <button class="tab-btn" data-tab="scfdm">SC-FDM</button>
+    <button class="tab-btn" data-tab="mrc">Diversidad RX (MRC)</button>
   </nav>
 
   <!-- ===================================================================== -->
@@ -326,6 +327,179 @@
   </div>
   </div>
 
+  <!-- ===================================================================== -->
+  <!-- ============ PANEL DIVERSIDAD RX - MRC (Práctica 3) ============ -->
+  <!-- ===================================================================== -->
+  <div class="tab-panel" id="panel-mrc">
+  <div class="contenedor">
+
+    <aside class="sidebar">
+      <section class="tarjeta">
+        <h2>Configuración OFDM (TX)</h2>
+        <div class="campo">
+          <label class="campo-label" for="mrc-bw">Ancho de Banda (BW)</label>
+          <select id="mrc-bw">
+            <option value="1.4">1.4 MHz</option>
+            <option value="3">3 MHz</option>
+            <option value="5" selected>5 MHz</option>
+            <option value="10">10 MHz</option>
+            <option value="15">15 MHz</option>
+            <option value="20">20 MHz</option>
+          </select>
+        </div>
+        <div class="campo">
+          <label class="campo-label" for="mrc-df">Espaciamiento Δf</label>
+          <select id="mrc-df">
+            <option value="15" selected>15 kHz</option>
+            <option value="7.5">7.5 kHz</option>
+          </select>
+        </div>
+        <div class="campo">
+          <label class="campo-label" for="mrc-cp">Prefijo Cíclico</label>
+          <select id="mrc-cp">
+            <option value="normal">Normal (4.7 µs)</option>
+            <option value="extendido">Extendido (16.67 µs)</option>
+          </select>
+        </div>
+        <div id="mrc-aviso-combinacion" class="aviso" style="display:none">
+          Δf = 7.5 kHz no es compatible con BW &lt; 5 MHz.
+        </div>
+      </section>
+
+      <section class="tarjeta">
+        <h2>Receptor con Diversidad</h2>
+        <div class="campo">
+          <label class="campo-label" for="mrc-modulacion">Modulación</label>
+          <select id="mrc-modulacion">
+            <option value="QPSK">QPSK</option>
+            <option value="16-QAM" selected>16-QAM</option>
+            <option value="64-QAM">64-QAM</option>
+          </select>
+        </div>
+        <div class="campo">
+          <label class="campo-label" for="mrc-antenas">Nº de antenas RX (demo)</label>
+          <select id="mrc-antenas">
+            <option value="2">2 antenas</option>
+            <option value="4" selected>4 antenas</option>
+            <option value="8">8 antenas</option>
+          </select>
+        </div>
+        <div class="campo">
+          <label class="campo-label" for="mrc-snr">SNR por antena (dB)</label>
+          <div class="slider-row">
+            <input type="range" id="mrc-snr" min="0" max="100" step="1" value="10" />
+            <input type="number" id="mrc-snr-num" min="0" max="100" step="1" value="10" />
+          </div>
+        </div>
+        <div class="campo">
+          <label class="campo-label">Modelo de Canal (por antena)</label>
+          <span class="badge badge-azul">Pedestrian A (ITU-R M.1225)</span>
+        </div>
+        <table>
+          <thead>
+            <tr><th>Tap</th><th>Retardo (ns)</th><th>Potencia (dB)</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>1</td><td>0</td><td>0</td></tr>
+            <tr><td>2</td><td>110</td><td>-9.7</td></tr>
+            <tr><td>3</td><td>190</td><td>-19.2</td></tr>
+            <tr><td>4</td><td>410</td><td>-22.8</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section class="tarjeta">
+        <h2>Imagen</h2>
+        <div class="campo">
+          <label class="campo-label" for="mrc-archivo-imagen">Subir imagen (.png, .jpg, .bmp)</label>
+          <input type="file" id="mrc-archivo-imagen" accept=".png,.jpg,.jpeg,.bmp" />
+        </div>
+        <img id="mrc-preview-imagen" class="preview-imagen" alt="Preview" />
+        <div id="mrc-info-imagen" class="estado"></div>
+      </section>
+    </aside>
+
+    <main class="principal">
+
+      <!-- Diagrama del receptor MRC -->
+      <section class="tarjeta">
+        <h2>Diversidad en Recepción — MRC (Maximal Ratio Combining)</h2>
+        <p class="nota">
+          El <strong>transmisor es el mismo</strong> de OFDM: envía una sola señal. El
+          <strong>receptor usa N antenas</strong> y la misma señal llega por <strong>N canales
+          independientes</strong> (Pedestrian A) con ruido propio. MRC combina las ramas
+          ponderando por <strong>conj(H<sub>m</sub>)</strong> y normalizando por Σ|H<sub>m</sub>|²:
+          alinea en fase (combinación coherente) y da más peso a las antenas con mejor canal.
+          Al añadir antenas la <strong>BER baja</strong> (ganancia de diversidad de orden N).
+        </p>
+        <div class="diagrama">
+          <div class="bloque">Imagen<br>→ Bits</div>
+          <span class="flecha">→</span>
+          <div class="bloque">Mapeo<br>QAM</div>
+          <span class="flecha">→</span>
+          <div class="bloque">IFFT (N)<br>+ CP</div>
+          <span class="flecha">→</span>
+          <div class="bloque canal">N canales<br>+ AWGN</div>
+          <span class="flecha">→</span>
+          <div class="bloque">Quita CP<br>+ FFT (×N)</div>
+          <span class="flecha">→</span>
+          <div class="bloque resaltado">MRC<br>Σ H*·Y / Σ|H|²</div>
+          <span class="flecha">→</span>
+          <div class="bloque">Demapeo<br>→ Imagen</div>
+        </div>
+        <div class="estado" style="margin-top:8px">
+          Bloque resaltado = combinación MRC de las N antenas (distingue esta práctica del receptor de 1 antena).
+        </div>
+      </section>
+
+      <section class="tarjeta">
+        <h2>Simulación</h2>
+        <div class="acciones" style="margin-top:4px; justify-content:center">
+          <button id="mrc-btn-simular" class="boton boton-primario">Simular Transmisión (MRC)</button>
+          <button id="mrc-btn-mc" class="boton boton-exito">Monte Carlo (MRC)</button>
+        </div>
+        <div id="mrc-estado-sim" class="estado" style="text-align:center; margin-top:10px"></div>
+      </section>
+
+      <section class="tarjeta">
+        <h2>Parámetros Calculados</h2>
+        <div id="mrc-kv-params" class="kv-grid"></div>
+      </section>
+
+      <div id="mrc-zona-resultados" style="display:none">
+        <div class="grid-resultados">
+          <section class="tarjeta">
+            <h3>Imágenes TX / RX</h3>
+            <div class="img-comparativa">
+              <figure><img id="mrc-img-tx" alt="Original" /><figcaption>Original</figcaption></figure>
+              <figure><img id="mrc-img-rx" alt="Recuperada" /><figcaption>Recuperada (MRC)</figcaption></figure>
+            </div>
+            <div class="ber-grande">
+              <div class="lbl">BER</div>
+              <div class="valor" id="mrc-ber-valor">—</div>
+              <div class="lbl" id="mrc-ber-detalle"></div>
+            </div>
+          </section>
+          <section class="tarjeta">
+            <h3>Constelación RX — antes vs después de MRC</h3>
+            <div class="img-comparativa">
+              <figure>
+                <canvas id="mrc-constelacion-antes-canvas" class="constelacion-canvas" width="360" height="360"></canvas>
+                <figcaption id="mrc-titulo-antes">1 antena (ZF)</figcaption>
+              </figure>
+              <figure>
+                <canvas id="mrc-constelacion-despues-canvas" class="constelacion-canvas" width="360" height="360"></canvas>
+                <figcaption id="mrc-titulo-despues">N antenas (MRC)</figcaption>
+              </figure>
+            </div>
+            <div class="estado" id="mrc-resumen-constelacion" style="margin-top:6px"></div>
+          </section>
+        </div>
+      </div>
+    </main>
+  </div>
+  </div>
+
   <!-- Lightbox compartido -->
   <div id="lightbox" class="lightbox" style="display:none">
     <span class="lightbox-cerrar">&times;</span>
@@ -370,6 +544,27 @@
         <canvas id="scfdm-montecarlo-canvas"></canvas>
         <h3 style="margin:24px 0 8px 0">CCDF del PAPR — Pr{PAPR &gt; X} (5 curvas)</h3>
         <canvas id="scfdm-papr-canvas"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal Monte Carlo MRC (diversidad en RX) -->
+  <div id="mrc-modal-mc" class="modal" style="display:none">
+    <div class="modal-contenido">
+      <div class="modal-header">
+        <h2 id="mrc-mc-titulo">Diversidad RX (MRC) — Monte Carlo (BER vs SNR)</h2>
+        <div class="modal-acciones">
+          <button id="mrc-btn-descargar-mc" class="boton boton-exito">Descargar PNG</button>
+          <button id="mrc-btn-cerrar-mc" class="boton boton-primario">Cerrar</button>
+        </div>
+      </div>
+      <div class="modal-body">
+        <div class="estado" style="margin-bottom:10px">
+          Cada curva = un nº de antenas RX. Al añadir antenas la curva <strong>baja</strong>
+          (ganancia de diversidad). Bandas = IC 95% (t-Student).
+        </div>
+        <h3 style="margin:0 0 8px 0">BER vs SNR</h3>
+        <canvas id="mrc-montecarlo-canvas"></canvas>
       </div>
     </div>
   </div>

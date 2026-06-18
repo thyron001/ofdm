@@ -638,6 +638,303 @@ function crearPanel(cfg) {
 }
 
 // =====================================================================
+// === PANEL DIVERSIDAD RX (MRC) — Práctica 3                        ===
+// =====================================================================
+// Panel propio (la factoría crearPanel está acoplada al mapa de cobertura, que aquí no aplica).
+// El TX es OFDM; el RX combina N antenas con MRC. Color de curva = nº de antenas.
+const COLORES_ANTENAS = { 2: '#18A34B', 4: '#1E54E0', 8: '#D82A2A' };
+
+function crearPanelMRC() {
+  const $ = (id) => document.getElementById(id);
+  const estado = { imagenSubida: false, nBits: 0, graficoMC: null };
+
+  // ---------- Parámetros ----------
+  function validarCombinacion() {
+    const ok = !COMBINACIONES_NO_VALIDAS.has(`${$('mrc-bw').value}_${$('mrc-df').value}`);
+    $('mrc-aviso-combinacion').style.display = ok ? 'none' : 'block';
+    return ok;
+  }
+  function actualizarOpcionesCP() {
+    const df = $('mrc-df').value;
+    const cp = $('mrc-cp');
+    if (df === '15') {
+      cp.innerHTML = '<option value="normal">Normal (4.7 µs)</option>' +
+                     '<option value="extendido">Extendido (16.67 µs)</option>';
+    } else {
+      cp.innerHTML = '<option value="extendido">Extendido (33.33 µs)</option>';
+    }
+  }
+  async function actualizarParametros() {
+    if (!validarCombinacion()) {
+      $('mrc-kv-params').innerHTML = '<div class="kv"><div class="kv-label">Combinación inválida</div></div>';
+      return;
+    }
+    const payload = {
+      bw_mhz: parseFloat($('mrc-bw').value),
+      delta_f_khz: parseFloat($('mrc-df').value),
+      tipo_cp: $('mrc-cp').value,
+      modulacion: $('mrc-modulacion').value,
+      n_bits: estado.nBits,
+    };
+    try {
+      const r = await fetch('/calcular_parametros', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const j = await r.json();
+      if (j.error) {
+        $('mrc-kv-params').innerHTML = `<div class="kv"><div class="kv-label">Error</div><div class="kv-valor" style="font-size:13px">${j.error}</div></div>`;
+        return;
+      }
+      renderKV(j);
+    } catch (e) { console.error(e); }
+  }
+  function renderKV(p) {
+    const items = [
+      ['Subportadoras útiles (N_SC)', p.n_sc],
+      ['Tamaño de la FFT (N_FFT)', p.n_fft],
+      ['Frecuencia de muestreo (fs)', (p.fs / 1e6).toFixed(3) + ' MHz'],
+      ['Muestras de prefijo cíclico (N_CP)', p.n_cp],
+      ['Subportadoras piloto', p.n_pilotos],
+      ['Subportadoras de datos', p.n_datos],
+      ['Bits totales de la imagen', (estado.nBits || 0).toLocaleString()],
+      ['Símbolos QAM totales', p.n_simbolos_qam.toLocaleString()],
+      ['Símbolos OFDM transmitidos', p.n_simbolos_ofdm.toLocaleString()],
+      ['Modulación aplicada', $('mrc-modulacion').value],
+      ['Antenas RX (demo)', $('mrc-antenas').value],
+    ];
+    $('mrc-kv-params').innerHTML = items.map(([l, v]) =>
+      `<div class="kv"><div class="kv-label">${l}</div><div class="kv-valor">${v}</div></div>`
+    ).join('');
+  }
+
+  // ---------- SNR slider ----------
+  function sincSNR() {
+    $('mrc-snr').addEventListener('input', () => { $('mrc-snr-num').value = $('mrc-snr').value; });
+    $('mrc-snr-num').addEventListener('input', () => {
+      let v = parseInt($('mrc-snr-num').value || '0');
+      if (v < 0) v = 0; if (v > 100) v = 100;
+      $('mrc-snr').value = v;
+    });
+  }
+
+  // ---------- Imagen ----------
+  async function subirImagen(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    const fd = new FormData();
+    fd.append('imagen', file);
+    $('mrc-info-imagen').textContent = 'Subiendo...';
+    const r = await fetch('/subir_imagen', { method: 'POST', body: fd });
+    const j = await r.json();
+    if (j.error) {
+      $('mrc-info-imagen').textContent = 'Error: ' + j.error;
+      $('mrc-info-imagen').className = 'estado err';
+      return;
+    }
+    broadcastImagen(j);   // actualiza esta pestaña y las otras
+  }
+  function notificarImagen(info) {
+    estado.imagenSubida = true;
+    estado.nBits = info.n_bits;
+    if (info.preview_b64) {
+      $('mrc-preview-imagen').src = info.preview_b64;
+      $('mrc-preview-imagen').style.display = 'block';
+    }
+    $('mrc-info-imagen').className = 'estado ok';
+    $('mrc-info-imagen').textContent =
+      `${info.ancho}×${info.alto}, ${info.canales} canal(es), ${info.n_bits.toLocaleString()} bits ✓`;
+    $('mrc-btn-simular').disabled = false;
+    actualizarParametros();
+  }
+
+  // ---------- Nube de constelación RX ----------
+  function dibujarNube(canvasId, puntos, mod, color) {
+    const cv = $(canvasId);
+    const ctx = cv.getContext('2d');
+    const W = cv.width, H = cv.height;
+    ctx.clearRect(0, 0, W, H);
+    const lim = mod === 'QPSK' ? 1.6 : (mod === '16-QAM' ? 1.8 : 2.0);
+    const sx = (x) => W / 2 + (x / lim) * (W / 2 - 10);
+    const sy = (y) => H / 2 - (y / lim) * (H / 2 - 10);
+    ctx.strokeStyle = '#E4EAF0'; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(W / 2, 0); ctx.lineTo(W / 2, H);
+    ctx.moveTo(0, H / 2); ctx.lineTo(W, H / 2); ctx.stroke();
+    ctx.fillStyle = color;
+    for (let i = 0; i < puntos.real.length; i++) {
+      ctx.beginPath(); ctx.arc(sx(puntos.real[i]), sy(puntos.imag[i]), 1.6, 0, Math.PI * 2); ctx.fill();
+    }
+  }
+
+  // ---------- Simulación única (imagen + constelaciones antes/después) ----------
+  async function ejecutarSimulacion() {
+    if (!estado.imagenSubida) { alert('Sube una imagen primero'); return; }
+    $('mrc-btn-simular').disabled = true;
+    $('mrc-btn-simular').innerHTML = '<span class="spinner"></span> Simulando...';
+    $('mrc-estado-sim').textContent = 'Ejecutando TX OFDM → N canales → MRC...';
+    $('mrc-estado-sim').className = 'estado';
+    const payload = {
+      bw_mhz: parseFloat($('mrc-bw').value),
+      delta_f_khz: parseFloat($('mrc-df').value),
+      tipo_cp: $('mrc-cp').value,
+      snr_db: parseFloat($('mrc-snr').value),
+      modulacion: $('mrc-modulacion').value,
+      n_rx: parseInt($('mrc-antenas').value),
+    };
+    try {
+      const r = await fetch('/simular_mrc', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const j = await r.json();
+      if (j.error) throw new Error(j.error);
+      pintarResultados(j);
+      $('mrc-estado-sim').textContent = 'Simulación completada ✓';
+      $('mrc-estado-sim').className = 'estado ok';
+    } catch (e) {
+      $('mrc-estado-sim').textContent = 'Error: ' + e.message;
+      $('mrc-estado-sim').className = 'estado err';
+    } finally {
+      $('mrc-btn-simular').disabled = false;
+      $('mrc-btn-simular').textContent = 'Simular Transmisión (MRC)';
+    }
+  }
+  function pintarResultados(j) {
+    $('mrc-zona-resultados').style.display = 'block';
+    $('mrc-img-tx').src = j.imagen_original_b64;
+    $('mrc-img-rx').src = j.imagen_recuperada_b64;
+    $('mrc-ber-valor').textContent = (j.ber * 100).toFixed(3) + ' %';
+    $('mrc-ber-detalle').textContent =
+      `${j.bits_erroneos.toLocaleString()} / ${j.bits_transmitidos.toLocaleString()} bits — ${j.n_simbolos_ofdm} símbolos OFDM — ${j.n_rx} antenas — SNR ${j.snr_db} dB`;
+    $('mrc-titulo-despues').textContent = `${j.n_rx} antenas (MRC)`;
+    if (j.constelacion_rx_antes) {
+      dibujarNube('mrc-constelacion-antes-canvas', j.constelacion_rx_antes, j.modulacion, 'rgba(216,42,42,0.45)');
+    }
+    dibujarNube('mrc-constelacion-despues-canvas', j.constelacion_rx, j.modulacion, 'rgba(24,163,75,0.5)');
+    $('mrc-resumen-constelacion').textContent =
+      `Izquierda: 1 sola antena con ZF (dispersa por el ruido). Derecha: las ${j.n_rx} antenas combinadas con MRC (nube más compacta = menor error).`;
+    renderKV(j.parametros);
+  }
+
+  // ---------- Monte Carlo (una curva por nº de antenas) ----------
+  async function ejecutarMontecarlo() {
+    $('mrc-btn-mc').disabled = true;
+    $('mrc-btn-mc').innerHTML = '<span class="spinner"></span> Ejecutando Monte Carlo...';
+    $('mrc-estado-sim').textContent = 'Monte Carlo: 3 curvas (2/4/8 antenas) × 16 SNR × 8 corridas (puede tardar)...';
+    $('mrc-estado-sim').className = 'estado';
+    const payload = {
+      bw_mhz: parseFloat($('mrc-bw').value),
+      delta_f_khz: parseFloat($('mrc-df').value),
+      tipo_cp: $('mrc-cp').value,
+      modulacion: $('mrc-modulacion').value,
+      antenas: [2, 4, 8],
+    };
+    try {
+      const r = await fetch('/montecarlo_mrc', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const j = await r.json();
+      if (j.error) throw new Error(j.error);
+      pintarMC(j);
+      $('mrc-estado-sim').textContent = 'Monte Carlo completado ✓';
+      $('mrc-estado-sim').className = 'estado ok';
+    } catch (e) {
+      $('mrc-estado-sim').textContent = 'Error: ' + e.message;
+      $('mrc-estado-sim').className = 'estado err';
+    } finally {
+      $('mrc-btn-mc').disabled = false;
+      $('mrc-btn-mc').textContent = 'Monte Carlo (MRC)';
+    }
+  }
+  function pintarMC(j) {
+    $('mrc-modal-mc').style.display = 'flex';
+    $('mrc-mc-titulo').textContent = `Diversidad RX (MRC) — BER vs SNR — ${j.modulacion}`;
+    if (estado.graficoMC) estado.graficoMC.destroy();
+    const PISO = 1e-5;
+    const datasets = j.series_ber.map((s) => ({
+      label: `${s.n_rx} antenas`,
+      data: s.ber_promedio.map((v, i) => ({ x: j.snr_valores[i], y: Math.max(v, PISO) })),
+      errorBars: s.ber_promedio.map((_, i) => ({
+        lo: Math.max(s.ic_inferior[i], PISO), hi: Math.max(s.ic_superior[i], PISO),
+      })),
+      borderColor: COLORES_ANTENAS[s.n_rx] || '#1E54E0',
+      backgroundColor: COLORES_ANTENAS[s.n_rx] || '#1E54E0',
+      pointRadius: 5, tension: 0.15, fill: false,
+    }));
+    estado.graficoMC = new Chart($('mrc-montecarlo-canvas').getContext('2d'), {
+      type: 'line',
+      data: { datasets },
+      options: {
+        responsive: true, maintainAspectRatio: false, animation: false,
+        scales: {
+          x: { type: 'linear', title: { display: true, text: 'SNR por antena (dB)', font: { weight: 700 } },
+               ticks: { stepSize: 1 }, min: -0.5, max: 15.5 },
+          y: { type: 'logarithmic', title: { display: true, text: 'BER (escala logarítmica)', font: { weight: 700 } },
+               min: PISO, max: 1 },
+        },
+        plugins: {
+          legend: { position: 'top', labels: { font: { weight: 700 } } },
+          tooltip: {
+            callbacks: {
+              label: (ctx) => {
+                const eb = ctx.dataset.errorBars[ctx.dataIndex];
+                return `${ctx.dataset.label}: BER=${ctx.parsed.y.toExponential(2)}  IC95% [${eb.lo.toExponential(2)}, ${eb.hi.toExponential(2)}]`;
+              },
+            },
+          },
+        },
+      },
+      plugins: [PLUGIN_ERROR_BARS],
+    });
+  }
+
+  // ---------- Descargar PNG ----------
+  function descargarMC() {
+    if (!estado.graficoMC) return;
+    const src = $('mrc-montecarlo-canvas');
+    const tmp = document.createElement('canvas');
+    tmp.width = src.width; tmp.height = src.height;
+    const tctx = tmp.getContext('2d');
+    tctx.fillStyle = '#FFFFFF'; tctx.fillRect(0, 0, tmp.width, tmp.height);
+    tctx.drawImage(src, 0, 0);
+    const link = document.createElement('a');
+    link.download = `mrc_ber_snr_${Date.now()}.png`;
+    link.href = tmp.toDataURL('image/png');
+    link.click();
+  }
+
+  // ---------- Cableado ----------
+  function bind() {
+    sincSNR();
+    $('mrc-df').addEventListener('change', () => { actualizarOpcionesCP(); actualizarParametros(); validarCombinacion(); });
+    $('mrc-bw').addEventListener('change', () => { actualizarParametros(); validarCombinacion(); });
+    $('mrc-cp').addEventListener('change', actualizarParametros);
+    $('mrc-modulacion').addEventListener('change', actualizarParametros);
+    $('mrc-antenas').addEventListener('change', actualizarParametros);
+    $('mrc-archivo-imagen').addEventListener('change', subirImagen);
+    $('mrc-btn-simular').addEventListener('click', ejecutarSimulacion);
+    $('mrc-btn-mc').addEventListener('click', ejecutarMontecarlo);
+    ['mrc-img-tx', 'mrc-img-rx'].forEach((k) => {
+      $(k).addEventListener('click', () => {
+        const lb = document.getElementById('lightbox');
+        document.getElementById('lightbox-img').src = $(k).src;
+        lb.style.display = 'flex';
+      });
+    });
+    $('mrc-btn-cerrar-mc').addEventListener('click', () => { $('mrc-modal-mc').style.display = 'none'; });
+    $('mrc-btn-descargar-mc').addEventListener('click', descargarMC);
+    $('mrc-modal-mc').addEventListener('click', (ev) => {
+      if (ev.target.id === 'mrc-modal-mc') $('mrc-modal-mc').style.display = 'none';
+    });
+    actualizarParametros();
+    $('mrc-btn-simular').disabled = true;
+  }
+
+  return { bind, notificarImagen, cerrarModal: () => { $('mrc-modal-mc').style.display = 'none'; } };
+}
+
+// =====================================================================
 // === CONFIGURACIÓN DE LOS DOS PANELES                              ===
 // =====================================================================
 function idsConPrefijo(pre, extra = {}) {
@@ -691,9 +988,11 @@ window.addEventListener('DOMContentLoaded', () => {
     ids: idsConPrefijo('scfdm', { formaOndaCanvas: 'scfdm-forma-onda-canvas', resumenPapr: 'scfdm-resumen-papr' }),
     zonas: ZONAS_SCFDM, esquemasMC: ['OFDM', 'SC-FDM'], mostrarFormaOnda: true,
   });
-  paneles.push(panelOFDM, panelSCFDM);
+  const panelMRC = crearPanelMRC();
+  paneles.push(panelOFDM, panelSCFDM, panelMRC);
   panelOFDM.bind();
   panelSCFDM.bind();
+  panelMRC.bind();
   initTabs();
   initLightbox();
 
@@ -703,6 +1002,7 @@ window.addEventListener('DOMContentLoaded', () => {
       document.getElementById('lightbox').style.display = 'none';
       panelOFDM.cerrarModal();
       panelSCFDM.cerrarModal();
+      panelMRC.cerrarModal();
     }
   });
 });
