@@ -632,6 +632,138 @@ def cadena_tx_rx(bits_tx: np.ndarray, modulacion: str, params: Dict,
     return salida
 
 
+def cadena_tx_sfbc_rx(bits_tx: np.ndarray, modulacion: str, params: Dict,
+                       snr_db: float, rng: np.random.Generator,
+                       capturar_constelaciones: bool = False,
+                       n_tx: int = 2, n_rx: int = 1) -> Dict:
+    """
+    Núcleo de la Práctica 4 (diversidad en TX con SFBC). Es la hermana de cadena_tx_rx pero el
+    transmisor usa n_tx antenas y un mapeo por PARES de subportadoras adyacentes:
+
+      - n_tx == 1  -> SISO de referencia (sin diversidad): canal Pedestrian A + ecualización ZF
+                      (Y/H). Si n_rx > 1 se combinan las antenas RX con MRC. Diversidad = n_rx.
+      - n_tx == 2  -> SFBC (código de Alamouti espacio-frecuencia): cada par de subportadoras
+                      adyacentes (k, k+1) lleva los símbolos (s0, s1) y, por la 2ª antena,
+                      (-s1*, s0*). Cada antena se escala por 1/√2 para REPARTIR la potencia total
+                      entre las dos (potencia total constante -> penalización de ~3 dB vs MRC).
+                      Cada antena RX ve dos canales independientes (H1, H2) y se decodifica con el
+                      combinador ortogonal de Alamouti, que separa s0 y s1 sin interferencia:
+                        s0_est = Σ_rx (conj(h1)·r0 + h2·conj(r1)) / Σ_rx (|h1|²+|h2|²)
+                        s1_est = Σ_rx (conj(h1)·r1 - h2·conj(r0)) / Σ_rx (|h1|²+|h2|²)
+                      Diversidad = 2·n_rx (2x1 -> 2, 2x2 -> 4).
+
+    A diferencia de OFDM, SFBC NO intercala pilotos: usa TODAS las subportadoras en pares (el CSI
+    es genie en este simulador, igual criterio que SC-FDM). Así los dos elementos de cada par son
+    físicamente adyacentes y se cumple H[k] ≈ H[k+1] (el canal Pedestrian A es muy suave en
+    frecuencia). El único par que cruza el hueco de DC tiene un desajuste de canal despreciable.
+    """
+    mod = MODULACIONES[modulacion]
+    n_sc = params["n_sc"]
+    n_fft = params["n_fft"]
+    n_cp = params["n_cp"]
+    fs = params["fs"]
+    bps = mod["bits"]
+
+    n_par = n_sc // 2                                  # Nº de pares Alamouti por símbolo OFDM
+    n_datos = n_par * 2                                # Subportadoras de datos usadas (siempre par)
+
+    # --- TX: bits -> símbolos QAM (relleno a múltiplo de bps y de n_datos), igual que cadena_tx_rx ---
+    falta = (-len(bits_tx)) % bps                      # Bits que faltan para múltiplo de bps
+    if falta:
+        bits_tx_pad = np.concatenate([bits_tx, np.zeros(falta, dtype=np.uint8)])
+    else:
+        bits_tx_pad = bits_tx
+    simbolos_qam = mod["mapear"](bits_tx_pad)          # Mapea todos los bits a símbolos QAM
+    falta_sim = (-len(simbolos_qam)) % n_datos         # Completa un nº entero de símbolos OFDM
+    if falta_sim:
+        simbolos_qam = np.concatenate([simbolos_qam, np.zeros(falta_sim, dtype=complex)])
+    n_ofdm = len(simbolos_qam) // n_datos              # Nº de símbolos OFDM a transmitir
+
+    constelacion_tx = simbolos_qam.copy() if capturar_constelaciones else None
+    simbolos_rx_datos = []                             # Acumulador de símbolos RX (constelación)
+    bits_rx_total = []                                 # Acumulador de bits recibidos
+
+    # Índices FFT de las n_sc subportadoras activas (no dependen de los datos: rejilla vacía)
+    _, indices_fft = modulacion_ofdm(np.zeros(n_sc, dtype=complex), n_fft, n_cp)
+    esc = 1.0 / np.sqrt(2.0)                           # Reparto de potencia entre las 2 antenas TX
+
+    for i in range(n_ofdm):                            # Procesa símbolo a símbolo
+        bloque = simbolos_qam[i * n_datos:(i + 1) * n_datos]  # Bloque de n_datos símbolos
+        s0 = bloque[0::2]                              # Símbolo "par" de cada pareja (subportadora k)
+        s1 = bloque[1::2]                              # Símbolo "impar" de cada pareja (subportadora k+1)
+
+        if n_tx <= 1:
+            # --- SISO de referencia (1 antena TX): símbolos en todas las subportadoras + ZF/MRC ---
+            x = np.zeros(n_sc, dtype=complex)
+            x[0::2][:n_par] = s0
+            x[1::2][:n_par] = s1
+            num = np.zeros(n_sc, dtype=complex)        # Σ conj(H)·Y  (ZF si n_rx=1, MRC si n_rx>1)
+            den = np.zeros(n_sc, dtype=float)          # Σ |H|²
+            for _r in range(max(n_rx, 1)):
+                H = generar_canal_pedestrian_a(n_fft, fs, indices_fft, rng)
+                senal_canal, _ = modulacion_ofdm(x * H, n_fft, n_cp)
+                senal_rx = agregar_ruido_awgn(senal_canal, snr_db, rng)
+                rejilla_rx = demodulacion_ofdm(senal_rx, indices_fft, n_fft, n_cp, n_sc)
+                num += np.conj(H) * rejilla_rx
+                den += np.abs(H) ** 2
+            rejilla_eq = num / (den + 1e-12)           # Estimación del símbolo (ZF/MRC)
+            datos_rx = np.empty(n_datos, dtype=complex)
+            datos_rx[0::2] = rejilla_eq[0::2][:n_par]
+            datos_rx[1::2] = rejilla_eq[1::2][:n_par]
+        else:
+            # --- SFBC Alamouti (2 antenas TX): rejillas espacio-frecuencia x1 y x2 ---
+            x1 = np.zeros(n_sc, dtype=complex)         # Rejilla de la antena 1
+            x2 = np.zeros(n_sc, dtype=complex)         # Rejilla de la antena 2
+            x1[0::2][:n_par] = esc * s0                # Antena 1, subportadora k   ->  s0
+            x1[1::2][:n_par] = esc * s1                # Antena 1, subportadora k+1 ->  s1
+            x2[0::2][:n_par] = esc * (-np.conj(s1))    # Antena 2, subportadora k   -> -s1*
+            x2[1::2][:n_par] = esc * (np.conj(s0))     # Antena 2, subportadora k+1 ->  s0*
+
+            num0 = np.zeros(n_par, dtype=complex)      # Acumulador del estimador de s0
+            num1 = np.zeros(n_par, dtype=complex)      # Acumulador del estimador de s1
+            den = np.zeros(n_par, dtype=float)         # Σ (|h1|²+|h2|²) sobre las antenas RX
+            for _r in range(n_rx):
+                H1 = generar_canal_pedestrian_a(n_fft, fs, indices_fft, rng)  # Canal TX1 -> esta RX
+                H2 = generar_canal_pedestrian_a(n_fft, fs, indices_fft, rng)  # Canal TX2 -> esta RX
+                senal1, _ = modulacion_ofdm(x1 * H1, n_fft, n_cp)            # Aporte de la antena 1
+                senal2, _ = modulacion_ofdm(x2 * H2, n_fft, n_cp)            # Aporte de la antena 2
+                senal_rx = agregar_ruido_awgn(senal1 + senal2, snr_db, rng)  # Se suman + AWGN
+                rejilla_rx = demodulacion_ofdm(senal_rx, indices_fft, n_fft, n_cp, n_sc)
+                r0 = rejilla_rx[0::2][:n_par]          # Recibido en la subportadora k
+                r1 = rejilla_rx[1::2][:n_par]          # Recibido en la subportadora k+1
+                h1 = H1[0::2][:n_par]                  # Canal TX1 en el par (H1[k] ≈ H1[k+1])
+                h2 = H2[0::2][:n_par]                  # Canal TX2 en el par
+                num0 += np.conj(h1) * r0 + h2 * np.conj(r1)   # Combinador Alamouti para s0
+                num1 += np.conj(h1) * r1 - h2 * np.conj(r0)   # Combinador Alamouti para s1
+                den += np.abs(h1) ** 2 + np.abs(h2) ** 2
+            # /esc deshace el reparto de potencia 1/√2 y devuelve la constelación a escala unitaria
+            # (imprescindible para que el demapeador de 16/64-QAM use las regiones de decisión correctas).
+            s0_est = (num0 / (den + 1e-12)) / esc
+            s1_est = (num1 / (den + 1e-12)) / esc
+            datos_rx = np.empty(n_datos, dtype=complex)
+            datos_rx[0::2] = s0_est
+            datos_rx[1::2] = s1_est
+
+        if capturar_constelaciones:
+            simbolos_rx_datos.append(datos_rx)
+        bits_rx_total.append(mod["demapear"](datos_rx))   # Demapea a bits y acumula
+
+    bits_rx = np.concatenate(bits_rx_total) if bits_rx_total else np.array([], dtype=np.uint8)
+    bits_rx = bits_rx[:len(bits_tx_pad)]               # Recorta al tamaño transmitido
+    ber = calcular_ber(bits_tx_pad, bits_rx)           # BER
+
+    salida = {
+        "bits_rx": bits_rx[:len(bits_tx)],             # Bits útiles (sin padding inicial)
+        "ber": ber,
+        "n_simbolos_ofdm": n_ofdm,
+    }
+    if capturar_constelaciones:
+        salida["constelacion_tx"] = constelacion_tx
+        salida["constelacion_rx"] = (np.concatenate(simbolos_rx_datos)
+                                     if simbolos_rx_datos else np.array([], dtype=complex))
+    return salida
+
+
 # =====================================================================================
 # === [BLOQUE 7] ENDPOINTS FLASK — exponen la lógica a la interfaz web               ===
 # =====================================================================================
@@ -1013,6 +1145,150 @@ def montecarlo_mrc():
             ic_sup.append(mu + margen)                 # Límite superior
         series_ber.append({                            # Guarda la curva de este nº de antenas
             "n_rx": n_rx,
+            "ber_promedio": ber_prom,
+            "ic_inferior": ic_inf,
+            "ic_superior": ic_sup,
+        })
+
+    return jsonify({                                   # Respuesta con todas las curvas
+        "snr_valores": snr_valores,
+        "n_simulaciones": n_sim,
+        "t_critico": t_critico,
+        "n_bits_mc": N_BITS_MC,
+        "modulacion": modulacion,
+        "series_ber": series_ber,
+    })
+
+
+@app.route("/simular_sfbc", methods=["POST"])
+def simular_sfbc():
+    """
+    Práctica 4 (diversidad en TX): ejecuta UNA transmisión de la imagen cargada con SFBC
+    (Alamouti) en la configuración elegida (2x1 o 2x2). Para la comparación "antes vs después"
+    ejecuta además una cadena SISO (1x1, sin diversidad) sobre los mismos bits. Devuelve la imagen
+    recuperada, la BER y las constelaciones RX sin diversidad (antes) y con SFBC (después).
+    """
+    data = request.get_json(force=True)
+    try:
+        bw = float(data["bw_mhz"])
+        df = float(data["delta_f_khz"])
+        cp = data["tipo_cp"]
+        snr = float(data["snr_db"])
+        modulacion = data["modulacion"]
+        config = data["config"]
+    except KeyError as e:
+        return jsonify({"error": f"Falta campo {e}"}), 400
+
+    CONFIGS = {"2x1": (2, 1), "2x2": (2, 2)}                          # Configuraciones SFBC válidas
+    if modulacion not in ESQUEMAS["OFDM"]["mods"]:                   # El transmisor de la práctica es OFDM
+        return jsonify({"error": f"{modulacion} no está disponible en OFDM"}), 400
+    if config not in CONFIGS:
+        return jsonify({"error": f"Configuración '{config}' no válida (use 2x1 o 2x2)"}), 400
+    if ESTADO["bits"] is None:                                       # Debe haber una imagen cargada
+        return jsonify({"error": "Primero suba una imagen"}), 400
+
+    n_tx, n_rx = CONFIGS[config]
+    bps = MODULACIONES[modulacion]["bits"]
+    bits_tx = ESTADO["bits"]                                         # Bits de la imagen (mismo TX)
+    params = calcular_parametros_ofdm(bw, df, cp, len(bits_tx), bps)
+
+    rng = np.random.default_rng()
+    t0 = time.perf_counter()
+    resultado = cadena_tx_sfbc_rx(bits_tx, modulacion, params, snr, rng,   # "Después": SFBC elegido
+                                   capturar_constelaciones=True, n_tx=n_tx, n_rx=n_rx)
+    ref = cadena_tx_sfbc_rx(bits_tx, modulacion, params, snr, rng,         # "Antes": SISO 1x1 de referencia
+                            capturar_constelaciones=True, n_tx=1, n_rx=1)
+    tiempo_computo_s = time.perf_counter() - t0
+
+    tiempo_aire_s = resultado["n_simbolos_ofdm"] * params["duracion_simbolo_us"] * 1e-6
+    img_rx = bits_a_imagen(resultado["bits_rx"], ESTADO["imagen_mode"], ESTADO["imagen_size"])
+    img_tx = Image.open(io.BytesIO(ESTADO["imagen_bytes"]))
+
+    def submuestrear(arr, max_n=3000):                              # Limita los puntos enviados al navegador
+        if len(arr) > max_n:
+            idx = np.random.choice(len(arr), max_n, replace=False)
+            return arr[idx]
+        return arr
+
+    c_rx = submuestrear(resultado["constelacion_rx"])
+    c_antes = submuestrear(ref["constelacion_rx"])
+    salida = {                                                      # Respuesta JSON al frontend
+        "ber": resultado["ber"],
+        "ber_antes": ref["ber"],
+        "modulacion": modulacion,
+        "config": config,
+        "n_tx": n_tx,
+        "n_rx": n_rx,
+        "snr_db": snr,
+        "bits_transmitidos": int(len(bits_tx)),
+        "bits_erroneos": int(round(resultado["ber"] * len(bits_tx))),
+        "n_simbolos_ofdm": int(resultado["n_simbolos_ofdm"]),
+        "imagen_original_b64": img_a_b64(img_tx),
+        "imagen_recuperada_b64": img_a_b64(img_rx),
+        "constelacion_rx": {"real": c_rx.real.tolist(), "imag": c_rx.imag.tolist()},
+        "constelacion_rx_antes": {"real": c_antes.real.tolist(), "imag": c_antes.imag.tolist()},
+        "parametros": params,
+        "tiempo_aire_s": tiempo_aire_s,
+        "tiempo_computo_s": tiempo_computo_s,
+    }
+    return jsonify(salida)
+
+
+@app.route("/montecarlo_sfbc", methods=["POST"])
+def montecarlo_sfbc():
+    """
+    Práctica 4: Monte Carlo de BER vs SNR para diversidad en TX. Calcula una curva por cada
+    configuración en `configs` (def. ["1x1", "2x1", "2x2"]). Al subir el orden de diversidad
+    (1 -> 2 -> 4) la curva debe caer con mayor pendiente. IC 95% con la t de Student.
+    """
+    data = request.get_json(force=True)
+    try:
+        bw = float(data["bw_mhz"])
+        df = float(data["delta_f_khz"])
+        cp = data["tipo_cp"]
+        modulacion = data["modulacion"]
+    except KeyError as e:
+        return jsonify({"error": f"Falta campo {e}"}), 400
+
+    if modulacion not in ESQUEMAS["OFDM"]["mods"]:
+        return jsonify({"error": f"{modulacion} no está disponible en OFDM"}), 400
+
+    # Configuraciones a simular: nombre -> (n_tx, n_rx). Diversidad = n_tx·n_rx aquí: 1, 2, 4.
+    CONFIGS = {"1x1": (1, 1), "2x1": (2, 1), "2x2": (2, 2)}
+    configs = [c for c in data.get("configs", ["1x1", "2x1", "2x2"]) if c in CONFIGS]
+    if not configs:
+        configs = ["1x1", "2x1", "2x2"]
+
+    N_BITS_MC = 10000                                  # Bits por corrida (igual que la práctica MRC)
+    snr_valores = list(range(0, 16))                   # Barrido de SNR de 0 a 15 dB
+    n_sim = 8                                          # Corridas independientes por punto
+    rng = np.random.default_rng()
+    # Valor crítico de la t de Student al 95% con n-1 grados de libertad
+    t_critico = float(t_student.ppf(0.975, df=n_sim - 1))
+
+    bps = MODULACIONES[modulacion]["bits"]
+    params = calcular_parametros_ofdm(bw, df, cp, N_BITS_MC, bps)
+
+    series_ber = []
+    for cfg in configs:                                # Una curva BER vs SNR por configuración
+        n_tx, n_rx = CONFIGS[cfg]
+        ber_prom, ic_inf, ic_sup = [], [], []
+        for snr in snr_valores:                        # Barre cada valor de SNR
+            bers = []
+            for _ in range(n_sim):                     # n_sim corridas independientes
+                bits_aleatorios = rng.integers(0, 2, N_BITS_MC, dtype=np.uint8)
+                r = cadena_tx_sfbc_rx(bits_aleatorios, modulacion, params, snr, rng,
+                                       capturar_constelaciones=False, n_tx=n_tx, n_rx=n_rx)
+                bers.append(r["ber"])
+            bers = np.array(bers)
+            mu = float(np.mean(bers))                  # BER promedio del punto
+            sd = float(np.std(bers, ddof=1)) if n_sim > 1 else 0.0
+            margen = t_critico * sd / np.sqrt(n_sim)   # Margen del intervalo de confianza
+            ber_prom.append(mu)
+            ic_inf.append(max(mu - margen, 1e-6))      # Límite inferior (acotado para escala log)
+            ic_sup.append(mu + margen)                 # Límite superior
+        series_ber.append({                            # Guarda la curva de esta configuración
+            "config": cfg,
             "ber_promedio": ber_prom,
             "ic_inferior": ic_inf,
             "ic_superior": ic_sup,

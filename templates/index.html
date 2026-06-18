@@ -21,6 +21,7 @@
     <button class="tab-btn activa" data-tab="ofdm">OFDM</button>
     <button class="tab-btn" data-tab="scfdm">SC-FDM</button>
     <button class="tab-btn" data-tab="mrc">Diversidad RX (MRC)</button>
+    <button class="tab-btn" data-tab="sfbc">Diversidad TX (SFBC)</button>
   </nav>
 
   <!-- ===================================================================== -->
@@ -500,6 +501,180 @@
   </div>
   </div>
 
+  <!-- ===================================================================== -->
+  <!-- ============ PANEL DIVERSIDAD TX - SFBC (Práctica 4) ============ -->
+  <!-- ===================================================================== -->
+  <div class="tab-panel" id="panel-sfbc">
+  <div class="contenedor">
+
+    <aside class="sidebar">
+      <section class="tarjeta">
+        <h2>Configuración OFDM (TX)</h2>
+        <div class="campo">
+          <label class="campo-label" for="sfbc-bw">Ancho de Banda (BW)</label>
+          <select id="sfbc-bw">
+            <option value="1.4">1.4 MHz</option>
+            <option value="3">3 MHz</option>
+            <option value="5" selected>5 MHz</option>
+            <option value="10">10 MHz</option>
+            <option value="15">15 MHz</option>
+            <option value="20">20 MHz</option>
+          </select>
+        </div>
+        <div class="campo">
+          <label class="campo-label" for="sfbc-df">Espaciamiento Δf</label>
+          <select id="sfbc-df">
+            <option value="15" selected>15 kHz</option>
+            <option value="7.5">7.5 kHz</option>
+          </select>
+        </div>
+        <div class="campo">
+          <label class="campo-label" for="sfbc-cp">Prefijo Cíclico</label>
+          <select id="sfbc-cp">
+            <option value="normal">Normal (4.7 µs)</option>
+            <option value="extendido">Extendido (16.67 µs)</option>
+          </select>
+        </div>
+        <div id="sfbc-aviso-combinacion" class="aviso" style="display:none">
+          Δf = 7.5 kHz no es compatible con BW &lt; 5 MHz.
+        </div>
+      </section>
+
+      <section class="tarjeta">
+        <h2>Transmisor con Diversidad</h2>
+        <div class="campo">
+          <label class="campo-label" for="sfbc-modulacion">Modulación</label>
+          <select id="sfbc-modulacion">
+            <option value="QPSK">QPSK</option>
+            <option value="16-QAM" selected>16-QAM</option>
+            <option value="64-QAM">64-QAM</option>
+          </select>
+        </div>
+        <div class="campo">
+          <label class="campo-label" for="sfbc-config">Configuración SFBC</label>
+          <select id="sfbc-config">
+            <option value="2x1" selected>2×1 (2 TX, 1 RX) — orden 2</option>
+            <option value="2x2">2×2 (2 TX, 2 RX) — orden 4</option>
+          </select>
+        </div>
+        <div class="campo">
+          <label class="campo-label" for="sfbc-snr">SNR recibida (dB)</label>
+          <div class="slider-row">
+            <input type="range" id="sfbc-snr" min="0" max="100" step="1" value="10" />
+            <input type="number" id="sfbc-snr-num" min="0" max="100" step="1" value="10" />
+          </div>
+        </div>
+        <div class="campo">
+          <label class="campo-label">Modelo de Canal (por enlace TX→RX)</label>
+          <span class="badge badge-azul">Pedestrian A (ITU-R M.1225)</span>
+        </div>
+        <table>
+          <thead>
+            <tr><th>Tap</th><th>Retardo (ns)</th><th>Potencia (dB)</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>1</td><td>0</td><td>0</td></tr>
+            <tr><td>2</td><td>110</td><td>-9.7</td></tr>
+            <tr><td>3</td><td>190</td><td>-19.2</td></tr>
+            <tr><td>4</td><td>410</td><td>-22.8</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section class="tarjeta">
+        <h2>Imagen</h2>
+        <div class="campo">
+          <label class="campo-label" for="sfbc-archivo-imagen">Subir imagen (.png, .jpg, .bmp)</label>
+          <input type="file" id="sfbc-archivo-imagen" accept=".png,.jpg,.jpeg,.bmp" />
+        </div>
+        <img id="sfbc-preview-imagen" class="preview-imagen" alt="Preview" />
+        <div id="sfbc-info-imagen" class="estado"></div>
+      </section>
+    </aside>
+
+    <main class="principal">
+
+      <!-- Diagrama del transmisor SFBC -->
+      <section class="tarjeta">
+        <h2>Diversidad en Transmisión — SFBC (Alamouti espacio-frecuencia)</h2>
+        <p class="nota">
+          El <strong>transmisor usa 2 antenas</strong>. Cada par de símbolos
+          <strong>(s<sub>0</sub>, s<sub>1</sub>)</strong> se mapea a dos subportadoras adyacentes:
+          la antena 1 envía <strong>[s<sub>0</sub>, s<sub>1</sub>]</strong> y la antena 2 envía
+          <strong>[−s<sub>1</sub>*, s<sub>0</sub>*]</strong> (cada una con potencia mitad, ×1/√2).
+          El receptor combina con el decodificador <strong>ortogonal de Alamouti</strong>, que
+          separa s<sub>0</sub> y s<sub>1</sub> sin interferencia y logra <strong>diversidad de
+          orden 2</strong> con 1 sola antena RX (orden 4 con 2 RX) — la misma ganancia que MRC pero
+          moviendo la complejidad al TX, con una penalización de ~3 dB por repartir la potencia.
+        </p>
+        <div class="diagrama">
+          <div class="bloque">Imagen<br>→ Bits</div>
+          <span class="flecha">→</span>
+          <div class="bloque">Mapeo<br>QAM</div>
+          <span class="flecha">→</span>
+          <div class="bloque resaltado">Codif. SFBC<br>[s₀, s₁ ; −s₁*, s₀*]</div>
+          <span class="flecha">→</span>
+          <div class="bloque">2× IFFT<br>+ CP (2 TX)</div>
+          <span class="flecha">→</span>
+          <div class="bloque canal">Canales<br>+ AWGN</div>
+          <span class="flecha">→</span>
+          <div class="bloque resaltado">Decod. SFBC<br>(Alamouti)</div>
+          <span class="flecha">→</span>
+          <div class="bloque">Demapeo<br>→ Imagen</div>
+        </div>
+        <div class="estado" style="margin-top:8px">
+          Bloques resaltados = codificación/decodificación SFBC (distingue esta práctica de la diversidad en RX).
+        </div>
+      </section>
+
+      <section class="tarjeta">
+        <h2>Simulación</h2>
+        <div class="acciones" style="margin-top:4px; justify-content:center">
+          <button id="sfbc-btn-simular" class="boton boton-primario">Simular Transmisión (SFBC)</button>
+          <button id="sfbc-btn-mc" class="boton boton-exito">Monte Carlo (SFBC)</button>
+        </div>
+        <div id="sfbc-estado-sim" class="estado" style="text-align:center; margin-top:10px"></div>
+      </section>
+
+      <section class="tarjeta">
+        <h2>Parámetros Calculados</h2>
+        <div id="sfbc-kv-params" class="kv-grid"></div>
+      </section>
+
+      <div id="sfbc-zona-resultados" style="display:none">
+        <div class="grid-resultados">
+          <section class="tarjeta">
+            <h3>Imágenes TX / RX</h3>
+            <div class="img-comparativa">
+              <figure><img id="sfbc-img-tx" alt="Original" /><figcaption>Original</figcaption></figure>
+              <figure><img id="sfbc-img-rx" alt="Recuperada" /><figcaption>Recuperada (SFBC)</figcaption></figure>
+            </div>
+            <div class="ber-grande">
+              <div class="lbl">BER</div>
+              <div class="valor" id="sfbc-ber-valor">—</div>
+              <div class="lbl" id="sfbc-ber-detalle"></div>
+            </div>
+          </section>
+          <section class="tarjeta">
+            <h3>Constelación RX — sin diversidad vs SFBC</h3>
+            <div class="img-comparativa">
+              <figure>
+                <canvas id="sfbc-constelacion-antes-canvas" class="constelacion-canvas" width="360" height="360"></canvas>
+                <figcaption id="sfbc-titulo-antes">Sin diversidad (1×1, ZF)</figcaption>
+              </figure>
+              <figure>
+                <canvas id="sfbc-constelacion-despues-canvas" class="constelacion-canvas" width="360" height="360"></canvas>
+                <figcaption id="sfbc-titulo-despues">SFBC 2×1</figcaption>
+              </figure>
+            </div>
+            <div class="estado" id="sfbc-resumen-constelacion" style="margin-top:6px"></div>
+          </section>
+        </div>
+      </div>
+    </main>
+  </div>
+  </div>
+
   <!-- Lightbox compartido -->
   <div id="lightbox" class="lightbox" style="display:none">
     <span class="lightbox-cerrar">&times;</span>
@@ -565,6 +740,27 @@
         </div>
         <h3 style="margin:0 0 8px 0">BER vs SNR</h3>
         <canvas id="mrc-montecarlo-canvas"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal Monte Carlo SFBC (diversidad en TX) -->
+  <div id="sfbc-modal-mc" class="modal" style="display:none">
+    <div class="modal-contenido">
+      <div class="modal-header">
+        <h2 id="sfbc-mc-titulo">Diversidad TX (SFBC) — Monte Carlo (BER vs SNR)</h2>
+        <div class="modal-acciones">
+          <button id="sfbc-btn-descargar-mc" class="boton boton-exito">Descargar PNG</button>
+          <button id="sfbc-btn-cerrar-mc" class="boton boton-primario">Cerrar</button>
+        </div>
+      </div>
+      <div class="modal-body">
+        <div class="estado" style="margin-bottom:10px">
+          Cada curva = una configuración (1×1 sin diversidad / 2×1 / 2×2). Al subir el orden de
+          diversidad la curva <strong>baja con mayor pendiente</strong>. Bandas = IC 95% (t-Student).
+        </div>
+        <h3 style="margin:0 0 8px 0">BER vs SNR</h3>
+        <canvas id="sfbc-montecarlo-canvas"></canvas>
       </div>
     </div>
   </div>
