@@ -811,8 +811,6 @@ function crearPanelMRC() {
       dibujarNube('mrc-constelacion-antes-canvas', j.constelacion_rx_antes, j.modulacion, 'rgba(216,42,42,0.45)');
     }
     dibujarNube('mrc-constelacion-despues-canvas', j.constelacion_rx, j.modulacion, 'rgba(24,163,75,0.5)');
-    $('mrc-resumen-constelacion').textContent =
-      `Izquierda: 1 sola antena con ZF (dispersa por el ruido). Derecha: las ${j.n_rx} antenas combinadas con MRC (nube más compacta = menor error).`;
     renderKV(j.parametros);
   }
 

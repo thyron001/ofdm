@@ -425,14 +425,6 @@
       <!-- Diagrama del receptor MRC -->
       <section class="tarjeta">
         <h2>Diversidad en Recepción — MRC (Maximal Ratio Combining)</h2>
-        <p class="nota">
-          El <strong>transmisor es el mismo</strong> de OFDM: envía una sola señal. El
-          <strong>receptor usa N antenas</strong> y la misma señal llega por <strong>N canales
-          independientes</strong> (Pedestrian A) con ruido propio. MRC combina las ramas
-          ponderando por <strong>conj(H<sub>m</sub>)</strong> y normalizando por Σ|H<sub>m</sub>|²:
-          alinea en fase (combinación coherente) y da más peso a las antenas con mejor canal.
-          Al añadir antenas la <strong>BER baja</strong> (ganancia de diversidad de orden N).
-        </p>
         <div class="diagrama">
           <div class="bloque">Imagen<br>→ Bits</div>
           <span class="flecha">→</span>
@@ -447,9 +439,6 @@
           <div class="bloque resaltado">MRC<br>Σ H*·Y / Σ|H|²</div>
           <span class="flecha">→</span>
           <div class="bloque">Demapeo<br>→ Imagen</div>
-        </div>
-        <div class="estado" style="margin-top:8px">
-          Bloque resaltado = combinación MRC de las N antenas (distingue esta práctica del receptor de 1 antena).
         </div>
       </section>
 
@@ -493,7 +482,6 @@
                 <figcaption id="mrc-titulo-despues">N antenas (MRC)</figcaption>
               </figure>
             </div>
-            <div class="estado" id="mrc-resumen-constelacion" style="margin-top:6px"></div>
           </section>
         </div>
       </div>
@@ -734,10 +722,6 @@
         </div>
       </div>
       <div class="modal-body">
-        <div class="estado" style="margin-bottom:10px">
-          Cada curva = un nº de antenas RX. Al añadir antenas la curva <strong>baja</strong>
-          (ganancia de diversidad). Bandas = IC 95% (t-Student).
-        </div>
         <h3 style="margin:0 0 8px 0">BER vs SNR</h3>
         <canvas id="mrc-montecarlo-canvas"></canvas>
       </div>
