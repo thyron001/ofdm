@@ -22,6 +22,7 @@
     <button class="tab-btn" data-tab="scfdm">SC-FDM</button>
     <button class="tab-btn" data-tab="mrc">Diversidad RX (MRC)</button>
     <button class="tab-btn" data-tab="sfbc">Diversidad TX (SFBC)</button>
+    <button class="tab-btn" data-tab="beamforming">Beamforming (MRT)</button>
   </nav>
 
   <!-- ===================================================================== -->
@@ -663,6 +664,178 @@
   </div>
   </div>
 
+  <!-- ============================ PESTAÑA BEAMFORMING (MRT) ============================ -->
+  <div class="tab-panel" id="panel-beamforming">
+  <div class="contenedor">
+
+    <aside class="sidebar">
+      <section class="tarjeta">
+        <h2>Configuración OFDM (TX)</h2>
+        <div class="campo">
+          <label class="campo-label" for="bf-bw">Ancho de Banda (BW)</label>
+          <select id="bf-bw">
+            <option value="1.4">1.4 MHz</option>
+            <option value="3">3 MHz</option>
+            <option value="5" selected>5 MHz</option>
+            <option value="10">10 MHz</option>
+            <option value="15">15 MHz</option>
+            <option value="20">20 MHz</option>
+          </select>
+        </div>
+        <div class="campo">
+          <label class="campo-label" for="bf-df">Espaciamiento Δf</label>
+          <select id="bf-df">
+            <option value="15" selected>15 kHz</option>
+            <option value="7.5">7.5 kHz</option>
+          </select>
+        </div>
+        <div class="campo">
+          <label class="campo-label" for="bf-cp">Prefijo Cíclico</label>
+          <select id="bf-cp">
+            <option value="normal">Normal (4.7 µs)</option>
+            <option value="extendido">Extendido (16.67 µs)</option>
+          </select>
+        </div>
+        <div id="bf-aviso-combinacion" class="aviso" style="display:none">
+          Δf = 7.5 kHz no es compatible con BW &lt; 5 MHz.
+        </div>
+      </section>
+
+      <section class="tarjeta">
+        <h2>Transmisor con Beamforming</h2>
+        <div class="campo">
+          <label class="campo-label" for="bf-modulacion">Modulación</label>
+          <select id="bf-modulacion">
+            <option value="QPSK">QPSK</option>
+            <option value="16-QAM" selected>16-QAM</option>
+            <option value="64-QAM">64-QAM</option>
+          </select>
+        </div>
+        <div class="campo">
+          <label class="campo-label" for="bf-config">Configuración Beamforming</label>
+          <select id="bf-config">
+            <option value="2x1" selected>2×1 (2 TX, 1 RX) — orden 2</option>
+            <option value="4x1">4×1 (4 TX, 1 RX) — orden 4</option>
+          </select>
+        </div>
+        <div class="campo">
+          <label class="campo-label" for="bf-snr">SNR de referencia (dB)</label>
+          <div class="slider-row">
+            <input type="range" id="bf-snr" min="0" max="100" step="1" value="10" />
+            <input type="number" id="bf-snr-num" min="0" max="100" step="1" value="10" />
+          </div>
+        </div>
+        <div class="campo">
+          <label class="campo-label">Modelo de Canal (por enlace antena TX→RX)</label>
+          <span class="badge badge-azul">Pedestrian A (ITU-R M.1225)</span>
+        </div>
+        <table>
+          <thead>
+            <tr><th>Tap</th><th>Retardo (ns)</th><th>Potencia (dB)</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>1</td><td>0</td><td>0</td></tr>
+            <tr><td>2</td><td>110</td><td>-9.7</td></tr>
+            <tr><td>3</td><td>190</td><td>-19.2</td></tr>
+            <tr><td>4</td><td>410</td><td>-22.8</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section class="tarjeta">
+        <h2>Imagen</h2>
+        <div class="campo">
+          <label class="campo-label" for="bf-archivo-imagen">Subir imagen (.png, .jpg, .bmp)</label>
+          <input type="file" id="bf-archivo-imagen" accept=".png,.jpg,.jpeg,.bmp" />
+        </div>
+        <img id="bf-preview-imagen" class="preview-imagen" alt="Preview" />
+        <div id="bf-info-imagen" class="estado"></div>
+      </section>
+    </aside>
+
+    <main class="principal">
+
+      <!-- Diagrama del transmisor con beamforming -->
+      <section class="tarjeta">
+        <h2>Beamforming en Transmisión — Precodificación MRT (CSI en el TX)</h2>
+        <p class="nota">
+          El <strong>transmisor usa N<sub>T</sub> antenas</strong> y, conociendo el canal (CSI en TX),
+          multiplica cada subportadora por un <strong>vector de precodificación</strong>
+          <strong>w̄[k] = h̄[k]* / ‖h̄[k]‖</strong> (MRT). El vector <strong>rota la fase</strong> de
+          cada antena para que las señales lleguen <strong>alineadas</strong> al receptor y asigna
+          más potencia a las antenas con mejor canal, manteniendo la potencia total (‖w̄‖=1).
+          Resultado: <strong>ganancia de arreglo</strong> (la potencia RX crece ×N<sub>T</sub>) +
+          <strong>diversidad de orden N<sub>T</sub></strong>. Es el <strong>dual de MRC</strong>:
+          MRC combina en RX con conj(H); MRT precodifica en TX con conj(H) normalizado.
+        </p>
+        <div class="diagrama">
+          <div class="bloque">Imagen<br>→ Bits</div>
+          <span class="flecha">→</span>
+          <div class="bloque">Mapeo<br>QAM</div>
+          <span class="flecha">→</span>
+          <div class="bloque resaltado">Precodif. MRT<br>w̄=h̄*/‖h̄‖</div>
+          <span class="flecha">→</span>
+          <div class="bloque">N<sub>T</sub>× IFFT<br>+ CP (N_T TX)</div>
+          <span class="flecha">→</span>
+          <div class="bloque canal">Canales<br>+ AWGN</div>
+          <span class="flecha">→</span>
+          <div class="bloque resaltado">Detector<br>ŝ = R/‖h̄‖</div>
+          <span class="flecha">→</span>
+          <div class="bloque">Demapeo<br>→ Imagen</div>
+        </div>
+        <div class="estado" style="margin-top:8px">
+          Bloques resaltados = precodificación/detección de beamforming (requieren conocer el canal en el TX).
+        </div>
+      </section>
+
+      <section class="tarjeta">
+        <h2>Simulación</h2>
+        <div class="acciones" style="margin-top:4px; justify-content:center">
+          <button id="bf-btn-simular" class="boton boton-primario">Simular Transmisión (Beamforming)</button>
+          <button id="bf-btn-mc" class="boton boton-exito">Monte Carlo (Beamforming)</button>
+        </div>
+        <div id="bf-estado-sim" class="estado" style="text-align:center; margin-top:10px"></div>
+      </section>
+
+      <section class="tarjeta">
+        <h2>Parámetros Calculados</h2>
+        <div id="bf-kv-params" class="kv-grid"></div>
+      </section>
+
+      <div id="bf-zona-resultados" style="display:none">
+        <div class="grid-resultados">
+          <section class="tarjeta">
+            <h3>Imágenes TX / RX</h3>
+            <div class="img-comparativa">
+              <figure><img id="bf-img-tx" alt="Original" /><figcaption>Original</figcaption></figure>
+              <figure><img id="bf-img-rx" alt="Recuperada" /><figcaption>Recuperada (Beamforming)</figcaption></figure>
+            </div>
+            <div class="ber-grande">
+              <div class="lbl">BER</div>
+              <div class="valor" id="bf-ber-valor">—</div>
+              <div class="lbl" id="bf-ber-detalle"></div>
+            </div>
+          </section>
+          <section class="tarjeta">
+            <h3>Constelación RX — sin beamforming vs MRT</h3>
+            <div class="img-comparativa">
+              <figure>
+                <canvas id="bf-constelacion-antes-canvas" class="constelacion-canvas" width="360" height="360"></canvas>
+                <figcaption id="bf-titulo-antes">Sin beamforming (1×1, ZF)</figcaption>
+              </figure>
+              <figure>
+                <canvas id="bf-constelacion-despues-canvas" class="constelacion-canvas" width="360" height="360"></canvas>
+                <figcaption id="bf-titulo-despues">Beamforming 2×1</figcaption>
+              </figure>
+            </div>
+            <div class="estado" id="bf-resumen-constelacion" style="margin-top:6px"></div>
+          </section>
+        </div>
+      </div>
+    </main>
+  </div>
+  </div>
+
   <!-- Lightbox compartido -->
   <div id="lightbox" class="lightbox" style="display:none">
     <span class="lightbox-cerrar">&times;</span>
@@ -745,6 +918,33 @@
         </div>
         <h3 style="margin:0 0 8px 0">BER vs SNR</h3>
         <canvas id="sfbc-montecarlo-canvas"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal Monte Carlo Beamforming (MRT) -->
+  <div id="bf-modal-mc" class="modal" style="display:none">
+    <div class="modal-contenido">
+      <div class="modal-header">
+        <h2 id="bf-mc-titulo">Beamforming en TX (MRT) — Monte Carlo (BER vs SNR)</h2>
+        <div class="modal-acciones">
+          <button id="bf-btn-descargar-mc" class="boton boton-exito">Descargar PNG</button>
+          <button id="bf-btn-cerrar-mc" class="boton boton-primario">Cerrar</button>
+        </div>
+      </div>
+      <div class="modal-body">
+        <div class="estado" style="margin-bottom:10px">
+          <strong>Arriba:</strong> órdenes de beamforming (1×1 / 2×1 / 4×1). Al subir N_T la curva
+          baja con <strong>mayor pendiente</strong> (diversidad de orden N_T) y se corre a la
+          <strong>izquierda</strong> (ganancia de arreglo ~10·log₁₀N_T dB).
+          <strong>Abajo:</strong> al mismo orden de diversidad 2, <strong>BF 2×1 y MRC 1×2 se solapan</strong>
+          (son duales) y le ganan <strong>~3 dB</strong> a SFBC 2×1, que reparte la potencia a ciegas
+          por no tener CSI en el TX. Bandas = IC 95% (t-Student).
+        </div>
+        <h3 style="margin:0 0 8px 0">Órdenes de beamforming — 1×1 / 2×1 / 4×1</h3>
+        <canvas id="bf-montecarlo-canvas"></canvas>
+        <h3 style="margin:24px 0 8px 0">Comparación al orden 2 — BF 2×1 vs SFBC 2×1 vs MRC 1×2</h3>
+        <canvas id="bf-overlay-canvas"></canvas>
       </div>
     </div>
   </div>

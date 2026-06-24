@@ -305,6 +305,25 @@ def agregar_ruido_awgn(senal: np.ndarray, snr_db: float, rng: np.random.Generato
     return senal + ruido                                # Señal contaminada
 
 
+def _agregar_ruido(senal: np.ndarray, snr_db: float, rng: np.random.Generator,
+                   pot_ref=None) -> np.ndarray:
+    """
+    AWGN con dos modos de calibración:
+      - pot_ref None      -> calibra el ruido a la potencia RECIBIDA por realización
+                             (agregar_ruido_awgn). Es el comportamiento de las Prácticas 1-4.
+      - pot_ref = <float> -> PISO DE RUIDO FIJO referido a esa potencia de TRANSMISIÓN de
+                             referencia (la de una antena, SISO). El piso NO depende de cuánta
+                             señal llega, así la GANANCIA DE ARREGLO del beamforming (la señal RX
+                             crece ×N_T) se refleja en la BER, y BF/SFBC/MRC quedan sobre el MISMO
+                             piso para poder compararlas de forma justa (Práctica 5).
+    """
+    if pot_ref is None:
+        return agregar_ruido_awgn(senal, snr_db, rng)
+    pot_ruido = pot_ref / (10 ** (snr_db / 10))
+    return senal + np.sqrt(pot_ruido / 2) * (rng.standard_normal(senal.shape) +
+                                             1j * rng.standard_normal(senal.shape))
+
+
 def calcular_ber(bits_tx: np.ndarray, bits_rx: np.ndarray) -> float:
     """Tasa de error de bit (BER) = bits distintos / bits comparados. Común a ambos esquemas."""
     n = min(len(bits_tx), len(bits_rx))                 # Compara solo la parte común
@@ -533,7 +552,8 @@ def calcular_papr_ccdf(modulacion: str, params: Dict,
 def cadena_tx_rx(bits_tx: np.ndarray, modulacion: str, params: Dict,
                   snr_db: float, rng: np.random.Generator,
                   capturar_constelaciones: bool = False,
-                  usar_dft_spread: bool = False, n_rx: int = 1) -> Dict:
+                  usar_dft_spread: bool = False, n_rx: int = 1,
+                  ruido_piso_fijo: bool = False) -> Dict:
     """
     Núcleo del simulador: ejecuta TX -> canal Pedestrian A -> AWGN -> RX para un vector de
     bits. Con usar_dft_spread=False es OFDM; con True es SC-FDM (añade DFT-spread/IDFT).
@@ -578,13 +598,16 @@ def cadena_tx_rx(bits_tx: np.ndarray, modulacion: str, params: Dict,
         bloque_datos = simbolos_qam[i * n_datos:(i + 1) * n_datos]  # Bloque de n_datos símbolos
         # TX: rejilla OFDM (datos+pilotos) o SC-FDM (DFT-spread en bloque contiguo localizado)
         rejilla = construir_rejilla_tx(bloque_datos, n_sc, n_datos, usar_dft_spread)
-        _, indices_fft = modulacion_ofdm(rejilla, n_fft, n_cp)       # IFFT + CP (solo para indices_fft)
+        senal_tx_ref, indices_fft = modulacion_ofdm(rejilla, n_fft, n_cp)  # IFFT + CP (indices y, si aplica, ref)
+        # Potencia de TX de referencia (1 antena) para el piso de ruido fijo de la Práctica 5;
+        # None -> calibración clásica al recibido (comportamiento de las Prácticas 1-3).
+        pot_ref = float(np.mean(np.abs(senal_tx_ref) ** 2)) if ruido_piso_fijo else None
 
         if n_rx <= 1:
             # --- Receptor de 1 antena: canal Pedestrian A + ecualización Zero-Forcing ---
             H = generar_canal_pedestrian_a(n_fft, fs, indices_fft, rng)  # Respuesta del canal H[k]
             senal_canal, _ = modulacion_ofdm(rejilla * H, n_fft, n_cp)   # Y[k]=H[k]·X[k], vuelve al tiempo
-            senal_rx = agregar_ruido_awgn(senal_canal, snr_db, rng)      # AWGN al SNR objetivo
+            senal_rx = _agregar_ruido(senal_canal, snr_db, rng, pot_ref)  # AWGN al SNR objetivo
             rejilla_rx = demodulacion_ofdm(senal_rx, indices_fft, n_fft, n_cp, n_sc)  # Quita CP + FFT
             rejilla_eq = rejilla_rx / H                                  # Ecualización ZF: divide por H[k]
         else:
@@ -595,7 +618,7 @@ def cadena_tx_rx(bits_tx: np.ndarray, modulacion: str, params: Dict,
             for m in range(n_rx):
                 H_m = generar_canal_pedestrian_a(n_fft, fs, indices_fft, rng)  # Canal independiente por antena
                 senal_canal, _ = modulacion_ofdm(rejilla * H_m, n_fft, n_cp)   # Y_m[k]=H_m[k]·X[k], al tiempo
-                senal_rx = agregar_ruido_awgn(senal_canal, snr_db, rng)        # Ruido independiente por antena
+                senal_rx = _agregar_ruido(senal_canal, snr_db, rng, pot_ref)   # Ruido independiente por antena
                 rejilla_rx_m = demodulacion_ofdm(senal_rx, indices_fft, n_fft, n_cp, n_sc)
                 num += np.conj(H_m) * rejilla_rx_m       # Pondera y alinea en fase (combinación coherente)
                 den += np.abs(H_m) ** 2                  # Suma de ganancias de canal
@@ -635,7 +658,8 @@ def cadena_tx_rx(bits_tx: np.ndarray, modulacion: str, params: Dict,
 def cadena_tx_sfbc_rx(bits_tx: np.ndarray, modulacion: str, params: Dict,
                        snr_db: float, rng: np.random.Generator,
                        capturar_constelaciones: bool = False,
-                       n_tx: int = 2, n_rx: int = 1) -> Dict:
+                       n_tx: int = 2, n_rx: int = 1,
+                       ruido_piso_fijo: bool = False) -> Dict:
     """
     Núcleo de la Práctica 4 (diversidad en TX con SFBC). Es la hermana de cadena_tx_rx pero el
     transmisor usa n_tx antenas y un mapeo por PARES de subportadoras adyacentes:
@@ -692,6 +716,17 @@ def cadena_tx_sfbc_rx(bits_tx: np.ndarray, modulacion: str, params: Dict,
         s0 = bloque[0::2]                              # Símbolo "par" de cada pareja (subportadora k)
         s1 = bloque[1::2]                              # Símbolo "impar" de cada pareja (subportadora k+1)
 
+        # Potencia de TX de referencia (1 antena a plena potencia con estos datos) para el piso de
+        # ruido fijo de la Práctica 5; None -> calibración clásica al recibido (comportamiento P4).
+        if ruido_piso_fijo:
+            grid_ref = np.zeros(n_sc, dtype=complex)
+            grid_ref[0::2][:n_par] = s0
+            grid_ref[1::2][:n_par] = s1
+            senal_ref, _ = modulacion_ofdm(grid_ref, n_fft, n_cp)
+            pot_ref = float(np.mean(np.abs(senal_ref) ** 2))
+        else:
+            pot_ref = None
+
         if n_tx <= 1:
             # --- SISO de referencia (1 antena TX): símbolos en todas las subportadoras + ZF/MRC ---
             x = np.zeros(n_sc, dtype=complex)
@@ -702,7 +737,7 @@ def cadena_tx_sfbc_rx(bits_tx: np.ndarray, modulacion: str, params: Dict,
             for _r in range(max(n_rx, 1)):
                 H = generar_canal_pedestrian_a(n_fft, fs, indices_fft, rng)
                 senal_canal, _ = modulacion_ofdm(x * H, n_fft, n_cp)
-                senal_rx = agregar_ruido_awgn(senal_canal, snr_db, rng)
+                senal_rx = _agregar_ruido(senal_canal, snr_db, rng, pot_ref)
                 rejilla_rx = demodulacion_ofdm(senal_rx, indices_fft, n_fft, n_cp, n_sc)
                 num += np.conj(H) * rejilla_rx
                 den += np.abs(H) ** 2
@@ -727,7 +762,7 @@ def cadena_tx_sfbc_rx(bits_tx: np.ndarray, modulacion: str, params: Dict,
                 H2 = generar_canal_pedestrian_a(n_fft, fs, indices_fft, rng)  # Canal TX2 -> esta RX
                 senal1, _ = modulacion_ofdm(x1 * H1, n_fft, n_cp)            # Aporte de la antena 1
                 senal2, _ = modulacion_ofdm(x2 * H2, n_fft, n_cp)            # Aporte de la antena 2
-                senal_rx = agregar_ruido_awgn(senal1 + senal2, snr_db, rng)  # Se suman + AWGN
+                senal_rx = _agregar_ruido(senal1 + senal2, snr_db, rng, pot_ref)  # Se suman + AWGN
                 rejilla_rx = demodulacion_ofdm(senal_rx, indices_fft, n_fft, n_cp, n_sc)
                 r0 = rejilla_rx[0::2][:n_par]          # Recibido en la subportadora k
                 r1 = rejilla_rx[1::2][:n_par]          # Recibido en la subportadora k+1
@@ -754,6 +789,136 @@ def cadena_tx_sfbc_rx(bits_tx: np.ndarray, modulacion: str, params: Dict,
 
     salida = {
         "bits_rx": bits_rx[:len(bits_tx)],             # Bits útiles (sin padding inicial)
+        "ber": ber,
+        "n_simbolos_ofdm": n_ofdm,
+    }
+    if capturar_constelaciones:
+        salida["constelacion_tx"] = constelacion_tx
+        salida["constelacion_rx"] = (np.concatenate(simbolos_rx_datos)
+                                     if simbolos_rx_datos else np.array([], dtype=complex))
+    return salida
+
+
+# =====================================================================================
+# === [BLOQUE 6b] BEAMFORMING — Práctica 5 (precodificación MRT con CSI en el TX)    ===
+# =====================================================================================
+# Beamforming en TX de "baja correlación" (diapositivas Cap. 5, pág. 170-179): conociendo el
+# canal en el transmisor (CSI en TX), cada subportadora se multiplica por un VECTOR DE
+# PRECODIFICACIÓN
+#       w̄[k] = h̄[k]* / ‖h̄[k]‖            (MRT, Maximum Ratio Transmission)
+# Es el DUAL EXACTO de MRC (Práctica 3): MRC combina en RX con conj(H); MRT precodifica en TX
+# con conj(H) normalizado. El vector rota la fase de cada antena para que las señales lleguen
+# ALINEADAS EN FASE al RX y asigna más potencia a las antenas con mejor |h_i|, manteniendo la
+# potencia total de TX (‖w̄‖=1). Resultado: GANANCIA DE ARREGLO (la potencia RX crece ×N_T) +
+# DIVERSIDAD de orden N_T. Como SFBC, NO usa pilotos: el CSI es genie (imprescindible, el TX
+# necesita el canal para precodificar). En OFDM la precodificación es POR SUBPORTADORA (cada
+# subportadora ve un canal plano), tal como indica la pág. 178-179.
+
+def precodificar_mrt(s_grid: np.ndarray, H: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    PASO CLAVE EN EL TX. Entran los símbolos s_grid (n_sc) y la matriz de canal H (n_tx × n_sc,
+    una fila por antena TX) y salen la rejilla transmitida por cada antena X (n_tx × n_sc) y la
+    ganancia efectiva del enlace 'norma' (n_sc):
+        norma[k] = ‖h̄[k]‖ = sqrt(Σ_i |H_i[k]|²)
+        w_i[k]   = conj(H_i[k]) / norma[k]      (cada columna tiene norma 1 -> potencia constante)
+        X_i[k]   = w_i[k] · s_grid[k]
+    Tras el canal, el RX recibe Σ_i H_i[k]·X_i[k] = norma[k]·s_grid[k] (las antenas suman en fase).
+    """
+    norma = np.sqrt(np.sum(np.abs(H) ** 2, axis=0))       # ‖h̄[k]‖ por subportadora
+    W = np.conj(H) / (norma + 1e-12)                       # Pesos MRT (cada columna de norma 1)
+    X = W * s_grid[np.newaxis, :]                          # Rejilla por antena: X_i[k] = w_i[k]·s[k]
+    return X, norma
+
+
+def detector_beamforming(R: np.ndarray, norma: np.ndarray) -> np.ndarray:
+    """
+    PASO CLAVE EN EL RX. Entra la rejilla recibida R (n_sc) y la ganancia efectiva 'norma'
+    (n_sc) y sale la estimación del símbolo: ŝ[k] = R[k] / norma[k]. Como el precodificador ya
+    alineó las fases, basta normalizar por ‖h̄[k]‖ (no hay fase residual que deshacer).
+    """
+    return R / (norma + 1e-12)
+
+
+def cadena_tx_beamforming_rx(bits_tx: np.ndarray, modulacion: str, params: Dict,
+                              snr_db: float, rng: np.random.Generator,
+                              capturar_constelaciones: bool = False,
+                              n_tx: int = 2) -> Dict:
+    """
+    Núcleo de la Práctica 5 (beamforming en TX con MRT). El TX conoce el canal y precodifica
+    hacia 1 antena RX con w̄[k]=h̄[k]*/‖h̄[k]‖ (la ganancia/diversidad de RX la cubre la P3-MRC):
+
+      - n_tx == 1  -> SISO de referencia (sin beamforming): canal Pedestrian A + ecualización ZF.
+      - n_tx >= 2  -> beamforming MRT: ganancia de arreglo (×n_tx en potencia RX) + diversidad
+                      de orden n_tx. La curva BER vs SNR baja con MAYOR PENDIENTE (diversidad) y
+                      se corre a la IZQUIERDA ~10·log10(n_tx) dB (ganancia de arreglo).
+
+    Igual que SFBC, NO intercala pilotos: TODAS las subportadoras llevan datos y el CSI es genie.
+    El ruido usa un PISO FIJO referido a la potencia de TX de una antena (ver _agregar_ruido),
+    para que la ganancia de arreglo sea visible y la comparación con SFBC/MRC sea justa.
+    """
+    mod = MODULACIONES[modulacion]
+    n_sc = params["n_sc"]
+    n_fft = params["n_fft"]
+    n_cp = params["n_cp"]
+    fs = params["fs"]
+    bps = mod["bits"]
+
+    # --- TX: bits -> símbolos QAM (relleno a múltiplo de bps y de n_sc), igual que cadena_tx_sfbc_rx ---
+    falta = (-len(bits_tx)) % bps                       # Bits que faltan para múltiplo de bps
+    if falta:
+        bits_tx_pad = np.concatenate([bits_tx, np.zeros(falta, dtype=np.uint8)])
+    else:
+        bits_tx_pad = bits_tx
+    simbolos_qam = mod["mapear"](bits_tx_pad)           # Mapea todos los bits a símbolos QAM
+    falta_sim = (-len(simbolos_qam)) % n_sc             # Completa un nº entero de símbolos OFDM
+    if falta_sim:
+        simbolos_qam = np.concatenate([simbolos_qam, np.zeros(falta_sim, dtype=complex)])
+    n_ofdm = len(simbolos_qam) // n_sc                  # Nº de símbolos OFDM a transmitir
+
+    constelacion_tx = simbolos_qam.copy() if capturar_constelaciones else None
+    simbolos_rx_datos = []                              # Acumulador de símbolos RX (constelación)
+    bits_rx_total = []                                  # Acumulador de bits recibidos
+
+    # Índices FFT de las n_sc subportadoras activas (no dependen de los datos: rejilla vacía)
+    _, indices_fft = modulacion_ofdm(np.zeros(n_sc, dtype=complex), n_fft, n_cp)
+
+    for i in range(n_ofdm):                             # Procesa símbolo a símbolo
+        s_grid = simbolos_qam[i * n_sc:(i + 1) * n_sc]  # n_sc símbolos en TODAS las subportadoras
+
+        # Canal: un enlace Pedestrian A INDEPENDIENTE por antena TX (caso de baja correlación)
+        H = np.stack([generar_canal_pedestrian_a(n_fft, fs, indices_fft, rng)
+                      for _ in range(max(n_tx, 1))])    # (n_tx × n_sc)
+
+        # Potencia de transmisión de referencia: la de una sola antena enviando s_grid (SISO)
+        senal_ref, _ = modulacion_ofdm(s_grid, n_fft, n_cp)
+        pot_ref = float(np.mean(np.abs(senal_ref) ** 2))
+
+        if n_tx <= 1:
+            # --- SISO de referencia (1 antena TX): canal + ecualización ZF ---
+            H0 = H[0]
+            senal_canal, _ = modulacion_ofdm(s_grid * H0, n_fft, n_cp)
+            senal_rx = _agregar_ruido(senal_canal, snr_db, rng, pot_ref)
+            rejilla_rx = demodulacion_ofdm(senal_rx, indices_fft, n_fft, n_cp, n_sc)
+            datos_rx = rejilla_rx / (H0 + 1e-12)        # Ecualización ZF
+        else:
+            # --- Beamforming MRT (n_tx antenas TX, 1 RX) ---
+            X, norma = precodificar_mrt(s_grid, H)      # ← PASO CLAVE TX: rejillas precodificadas
+            senal_rx_clean = sum(modulacion_ofdm(X[a] * H[a], n_fft, n_cp)[0]
+                                 for a in range(n_tx))  # El RX ve la suma coherente de las n_tx antenas
+            senal_rx = _agregar_ruido(senal_rx_clean, snr_db, rng, pot_ref)
+            rejilla_rx = demodulacion_ofdm(senal_rx, indices_fft, n_fft, n_cp, n_sc)
+            datos_rx = detector_beamforming(rejilla_rx, norma)  # ← PASO CLAVE RX: ŝ = R/‖h̄‖
+
+        if capturar_constelaciones:
+            simbolos_rx_datos.append(datos_rx)
+        bits_rx_total.append(mod["demapear"](datos_rx))  # Demapea a bits y acumula
+
+    bits_rx = np.concatenate(bits_rx_total) if bits_rx_total else np.array([], dtype=np.uint8)
+    bits_rx = bits_rx[:len(bits_tx_pad)]                # Recorta al tamaño transmitido
+    ber = calcular_ber(bits_tx_pad, bits_rx)            # BER
+
+    salida = {
+        "bits_rx": bits_rx[:len(bits_tx)],              # Bits útiles (sin padding inicial)
         "ber": ber,
         "n_simbolos_ofdm": n_ofdm,
     }
@@ -1301,6 +1466,172 @@ def montecarlo_sfbc():
         "n_bits_mc": N_BITS_MC,
         "modulacion": modulacion,
         "series_ber": series_ber,
+    })
+
+
+@app.route("/simular_beamforming", methods=["POST"])
+def simular_beamforming():
+    """
+    Práctica 5 (beamforming en TX con MRT): ejecuta UNA transmisión de la imagen cargada con
+    beamforming en la configuración elegida (2x1 o 4x1). Para la comparación "antes vs después"
+    ejecuta además una cadena SISO (1x1, sin beamforming) sobre los mismos bits. Devuelve la
+    imagen recuperada, la BER y las constelaciones RX sin beamforming (antes) y con MRT (después).
+    """
+    data = request.get_json(force=True)
+    try:
+        bw = float(data["bw_mhz"])
+        df = float(data["delta_f_khz"])
+        cp = data["tipo_cp"]
+        snr = float(data["snr_db"])
+        modulacion = data["modulacion"]
+        config = data["config"]
+    except KeyError as e:
+        return jsonify({"error": f"Falta campo {e}"}), 400
+
+    CONFIGS = {"2x1": 2, "4x1": 4}                                    # Configuraciones BF válidas (n_tx)
+    if modulacion not in ESQUEMAS["OFDM"]["mods"]:                   # El transmisor de la práctica es OFDM
+        return jsonify({"error": f"{modulacion} no está disponible en OFDM"}), 400
+    if config not in CONFIGS:
+        return jsonify({"error": f"Configuración '{config}' no válida (use 2x1 o 4x1)"}), 400
+    if ESTADO["bits"] is None:                                       # Debe haber una imagen cargada
+        return jsonify({"error": "Primero suba una imagen"}), 400
+
+    n_tx = CONFIGS[config]
+    bps = MODULACIONES[modulacion]["bits"]
+    bits_tx = ESTADO["bits"]                                         # Bits de la imagen (mismo TX)
+    params = calcular_parametros_ofdm(bw, df, cp, len(bits_tx), bps)
+
+    rng = np.random.default_rng()
+    t0 = time.perf_counter()
+    resultado = cadena_tx_beamforming_rx(bits_tx, modulacion, params, snr, rng,  # "Después": BF elegido
+                                         capturar_constelaciones=True, n_tx=n_tx)
+    ref = cadena_tx_beamforming_rx(bits_tx, modulacion, params, snr, rng,        # "Antes": SISO 1x1
+                                   capturar_constelaciones=True, n_tx=1)
+    tiempo_computo_s = time.perf_counter() - t0
+
+    tiempo_aire_s = resultado["n_simbolos_ofdm"] * params["duracion_simbolo_us"] * 1e-6
+    img_rx = bits_a_imagen(resultado["bits_rx"], ESTADO["imagen_mode"], ESTADO["imagen_size"])
+    img_tx = Image.open(io.BytesIO(ESTADO["imagen_bytes"]))
+
+    def submuestrear(arr, max_n=3000):                              # Limita los puntos enviados al navegador
+        if len(arr) > max_n:
+            idx = np.random.choice(len(arr), max_n, replace=False)
+            return arr[idx]
+        return arr
+
+    c_rx = submuestrear(resultado["constelacion_rx"])
+    c_antes = submuestrear(ref["constelacion_rx"])
+    salida = {                                                      # Respuesta JSON al frontend
+        "ber": resultado["ber"],
+        "ber_antes": ref["ber"],
+        "modulacion": modulacion,
+        "config": config,
+        "n_tx": n_tx,
+        "n_rx": 1,
+        "snr_db": snr,
+        "bits_transmitidos": int(len(bits_tx)),
+        "bits_erroneos": int(round(resultado["ber"] * len(bits_tx))),
+        "n_simbolos_ofdm": int(resultado["n_simbolos_ofdm"]),
+        "imagen_original_b64": img_a_b64(img_tx),
+        "imagen_recuperada_b64": img_a_b64(img_rx),
+        "constelacion_rx": {"real": c_rx.real.tolist(), "imag": c_rx.imag.tolist()},
+        "constelacion_rx_antes": {"real": c_antes.real.tolist(), "imag": c_antes.imag.tolist()},
+        "parametros": params,
+        "tiempo_aire_s": tiempo_aire_s,
+        "tiempo_computo_s": tiempo_computo_s,
+    }
+    return jsonify(salida)
+
+
+def _curva_ber_mc(funcion_corrida, snr_valores, n_sim, t_critico):
+    """
+    Apoyo del Monte Carlo: para cada SNR ejecuta n_sim corridas de `funcion_corrida(snr)` (que
+    devuelve una BER) y arma la curva con su intervalo de confianza al 95% (t de Student).
+    """
+    ber_prom, ic_inf, ic_sup = [], [], []
+    for snr in snr_valores:
+        bers = np.array([funcion_corrida(snr) for _ in range(n_sim)])
+        mu = float(np.mean(bers))
+        sd = float(np.std(bers, ddof=1)) if n_sim > 1 else 0.0
+        margen = t_critico * sd / np.sqrt(n_sim)
+        ber_prom.append(mu)
+        ic_inf.append(max(mu - margen, 1e-6))
+        ic_sup.append(mu + margen)
+    return ber_prom, ic_inf, ic_sup
+
+
+@app.route("/montecarlo_beamforming", methods=["POST"])
+def montecarlo_beamforming():
+    """
+    Práctica 5: Monte Carlo de BER vs SNR para beamforming en TX (MRT). Devuelve DOS conjuntos
+    de curvas:
+      - series_bf: órdenes de beamforming 1×1 / 2×1 / 4×1. Al subir n_tx la curva baja con mayor
+        pendiente (diversidad de orden n_tx) y se corre a la izquierda (ganancia de arreglo).
+      - series_overlay: comparación de las 3 prácticas al MISMO orden de diversidad 2:
+        BF 2×1 (MRT, P5) vs SFBC 2×1 (Alamouti, P4) vs MRC 1×2 (P3). BF y MRC se solapan (son
+        duales: ~3 dB de ganancia de arreglo + orden 2) y le ganan ~3 dB a SFBC, que reparte la
+        potencia a ciegas por no tener CSI en el TX. IC 95% con la t de Student.
+    """
+    data = request.get_json(force=True)
+    try:
+        bw = float(data["bw_mhz"])
+        df = float(data["delta_f_khz"])
+        cp = data["tipo_cp"]
+        modulacion = data["modulacion"]
+    except KeyError as e:
+        return jsonify({"error": f"Falta campo {e}"}), 400
+
+    if modulacion not in ESQUEMAS["OFDM"]["mods"]:
+        return jsonify({"error": f"{modulacion} no está disponible en OFDM"}), 400
+
+    N_BITS_MC = 10000                                  # Bits por corrida (igual que MRC/SFBC)
+    snr_valores = list(range(0, 16))                   # Barrido de SNR de 0 a 15 dB
+    n_sim = 8                                          # Corridas independientes por punto
+    rng = np.random.default_rng()
+    t_critico = float(t_student.ppf(0.975, df=n_sim - 1))   # t de Student al 95%
+
+    bps = MODULACIONES[modulacion]["bits"]
+    params = calcular_parametros_ofdm(bw, df, cp, N_BITS_MC, bps)
+
+    def corrida(funcion):                              # Genera bits nuevos y devuelve la BER de una corrida
+        return lambda snr: funcion(rng.integers(0, 2, N_BITS_MC, dtype=np.uint8), snr)
+
+    # --- Órdenes de beamforming: 1×1 / 2×1 / 4×1 ---
+    CONFIGS_BF = [("1x1", 1), ("2x1", 2), ("4x1", 4)]
+    series_bf, curva_bf_2x1 = [], None
+    for nombre, n_tx in CONFIGS_BF:
+        f = corrida(lambda bits, snr, n_tx=n_tx: cadena_tx_beamforming_rx(
+            bits, modulacion, params, snr, rng, n_tx=n_tx)["ber"])
+        ber_prom, ic_inf, ic_sup = _curva_ber_mc(f, snr_valores, n_sim, t_critico)
+        item = {"config": nombre, "ber_promedio": ber_prom, "ic_inferior": ic_inf, "ic_superior": ic_sup}
+        series_bf.append(item)
+        if nombre == "2x1":
+            curva_bf_2x1 = item
+
+    # --- Overlay comparativo (mismo orden de diversidad 2): BF 2×1 / SFBC 2×1 / MRC 1×2 ---
+    # Las tres se calculan con el MISMO piso de ruido fijo (ruido_piso_fijo=True) que el beamforming,
+    # para que la comparación sea justa: BF 2×1 y MRC 1×2 se solapan (duales) y le ganan ~3 dB a SFBC.
+    f_sfbc = corrida(lambda bits, snr: cadena_tx_sfbc_rx(
+        bits, modulacion, params, snr, rng, n_tx=2, n_rx=1, ruido_piso_fijo=True)["ber"])
+    sfbc_prom, sfbc_inf, sfbc_sup = _curva_ber_mc(f_sfbc, snr_valores, n_sim, t_critico)
+    f_mrc = corrida(lambda bits, snr: cadena_tx_rx(
+        bits, modulacion, params, snr, rng, usar_dft_spread=False, n_rx=2, ruido_piso_fijo=True)["ber"])
+    mrc_prom, mrc_inf, mrc_sup = _curva_ber_mc(f_mrc, snr_valores, n_sim, t_critico)
+    series_overlay = [
+        {"tecnica": "BF 2x1", "ber_promedio": curva_bf_2x1["ber_promedio"],
+         "ic_inferior": curva_bf_2x1["ic_inferior"], "ic_superior": curva_bf_2x1["ic_superior"]},
+        {"tecnica": "SFBC 2x1", "ber_promedio": sfbc_prom, "ic_inferior": sfbc_inf, "ic_superior": sfbc_sup},
+        {"tecnica": "MRC 1x2", "ber_promedio": mrc_prom, "ic_inferior": mrc_inf, "ic_superior": mrc_sup},
+    ]
+
+    return jsonify({                                   # Respuesta con los dos conjuntos de curvas
+        "snr_valores": snr_valores,
+        "n_simulaciones": n_sim,
+        "t_critico": t_critico,
+        "n_bits_mc": N_BITS_MC,
+        "modulacion": modulacion,
+        "series_bf": series_bf,
+        "series_overlay": series_overlay,
     })
 
 

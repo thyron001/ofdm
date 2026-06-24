@@ -1233,6 +1233,317 @@ function crearPanelSFBC() {
   return { bind, notificarImagen, cerrarModal: () => { $('sfbc-modal-mc').style.display = 'none'; } };
 }
 
+// Panel propio (espejo de crearPanelSFBC). El TX usa N_T antenas y precodificación MRT
+// (w̄=h̄*/‖h̄‖) con CSI en el TX; el color identifica la configuración (1×1/2×1/4×1).
+const COLORES_BF = { '1x1': '#D82A2A', '2x1': '#1E54E0', '4x1': '#18A34B' };
+const ETIQUETAS_BF = { '1x1': '1×1 (sin beamforming)', '2x1': '2×1 (BF MRT)', '4x1': '4×1 (BF MRT)' };
+const COLORES_OVERLAY = { 'BF 2x1': '#1E54E0', 'SFBC 2x1': '#E58A1A', 'MRC 1x2': '#18A34B' };
+const ETIQUETAS_OVERLAY = { 'BF 2x1': 'BF 2×1 (MRT, P5)', 'SFBC 2x1': 'SFBC 2×1 (P4)', 'MRC 1x2': 'MRC 1×2 (P3)' };
+
+function crearPanelBeamforming() {
+  const $ = (id) => document.getElementById(id);
+  const estado = { imagenSubida: false, nBits: 0, graficoMC: null, graficoOverlay: null };
+
+  // ---------- Parámetros ----------
+  function validarCombinacion() {
+    const ok = !COMBINACIONES_NO_VALIDAS.has(`${$('bf-bw').value}_${$('bf-df').value}`);
+    $('bf-aviso-combinacion').style.display = ok ? 'none' : 'block';
+    return ok;
+  }
+  function actualizarOpcionesCP() {
+    const df = $('bf-df').value;
+    const cp = $('bf-cp');
+    if (df === '15') {
+      cp.innerHTML = '<option value="normal">Normal (4.7 µs)</option>' +
+                     '<option value="extendido">Extendido (16.67 µs)</option>';
+    } else {
+      cp.innerHTML = '<option value="extendido">Extendido (33.33 µs)</option>';
+    }
+  }
+  async function actualizarParametros() {
+    if (!validarCombinacion()) {
+      $('bf-kv-params').innerHTML = '<div class="kv"><div class="kv-label">Combinación inválida</div></div>';
+      return;
+    }
+    const payload = {
+      bw_mhz: parseFloat($('bf-bw').value),
+      delta_f_khz: parseFloat($('bf-df').value),
+      tipo_cp: $('bf-cp').value,
+      modulacion: $('bf-modulacion').value,
+      n_bits: estado.nBits,
+    };
+    try {
+      const r = await fetch('/calcular_parametros', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const j = await r.json();
+      if (j.error) {
+        $('bf-kv-params').innerHTML = `<div class="kv"><div class="kv-label">Error</div><div class="kv-valor" style="font-size:13px">${j.error}</div></div>`;
+        return;
+      }
+      renderKV(j);
+    } catch (e) { console.error(e); }
+  }
+  function renderKV(p) {
+    const nTx = ($('bf-config').value || '2x1').split('x')[0];
+    const items = [
+      ['Subportadoras útiles (N_SC)', p.n_sc],
+      ['Tamaño de la FFT (N_FFT)', p.n_fft],
+      ['Frecuencia de muestreo (fs)', (p.fs / 1e6).toFixed(3) + ' MHz'],
+      ['Muestras de prefijo cíclico (N_CP)', p.n_cp],
+      ['Antenas transmisoras (N_T)', nTx],
+      ['Bits totales de la imagen', (estado.nBits || 0).toLocaleString()],
+      ['Modulación aplicada', $('bf-modulacion').value],
+      ['Configuración beamforming', $('bf-config').value.replace('x', '×')],
+    ];
+    $('bf-kv-params').innerHTML = items.map(([l, v]) =>
+      `<div class="kv"><div class="kv-label">${l}</div><div class="kv-valor">${v}</div></div>`
+    ).join('') +
+      '<div class="kv" style="grid-column:1/-1"><div class="kv-label" style="font-size:12px">' +
+      'Beamforming MRT precodifica por subportadora con w̄[k]=h̄[k]*/‖h̄[k]‖ (CSI en el TX, sin pilotos).' +
+      '</div></div>';
+  }
+
+  // ---------- SNR slider ----------
+  function sincSNR() {
+    $('bf-snr').addEventListener('input', () => { $('bf-snr-num').value = $('bf-snr').value; });
+    $('bf-snr-num').addEventListener('input', () => {
+      let v = parseInt($('bf-snr-num').value || '0');
+      if (v < 0) v = 0; if (v > 100) v = 100;
+      $('bf-snr').value = v;
+    });
+  }
+
+  // ---------- Imagen ----------
+  async function subirImagen(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    const fd = new FormData();
+    fd.append('imagen', file);
+    $('bf-info-imagen').textContent = 'Subiendo...';
+    const r = await fetch('/subir_imagen', { method: 'POST', body: fd });
+    const j = await r.json();
+    if (j.error) {
+      $('bf-info-imagen').textContent = 'Error: ' + j.error;
+      $('bf-info-imagen').className = 'estado err';
+      return;
+    }
+    broadcastImagen(j);   // actualiza esta pestaña y las otras
+  }
+  function notificarImagen(info) {
+    estado.imagenSubida = true;
+    estado.nBits = info.n_bits;
+    if (info.preview_b64) {
+      $('bf-preview-imagen').src = info.preview_b64;
+      $('bf-preview-imagen').style.display = 'block';
+    }
+    $('bf-info-imagen').className = 'estado ok';
+    $('bf-info-imagen').textContent =
+      `${info.ancho}×${info.alto}, ${info.canales} canal(es), ${info.n_bits.toLocaleString()} bits ✓`;
+    $('bf-btn-simular').disabled = false;
+    actualizarParametros();
+  }
+
+  // ---------- Nube de constelación RX ----------
+  function dibujarNube(canvasId, puntos, mod, color) {
+    const cv = $(canvasId);
+    const ctx = cv.getContext('2d');
+    const W = cv.width, H = cv.height;
+    ctx.clearRect(0, 0, W, H);
+    const lim = mod === 'QPSK' ? 1.6 : (mod === '16-QAM' ? 1.8 : 2.0);
+    const sx = (x) => W / 2 + (x / lim) * (W / 2 - 10);
+    const sy = (y) => H / 2 - (y / lim) * (H / 2 - 10);
+    ctx.strokeStyle = '#E4EAF0'; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(W / 2, 0); ctx.lineTo(W / 2, H);
+    ctx.moveTo(0, H / 2); ctx.lineTo(W, H / 2); ctx.stroke();
+    ctx.fillStyle = color;
+    for (let i = 0; i < puntos.real.length; i++) {
+      ctx.beginPath(); ctx.arc(sx(puntos.real[i]), sy(puntos.imag[i]), 1.6, 0, Math.PI * 2); ctx.fill();
+    }
+  }
+
+  // ---------- Simulación única (imagen + constelaciones sin beamforming vs MRT) ----------
+  async function ejecutarSimulacion() {
+    if (!estado.imagenSubida) { alert('Sube una imagen primero'); return; }
+    $('bf-btn-simular').disabled = true;
+    $('bf-btn-simular').innerHTML = '<span class="spinner"></span> Simulando...';
+    $('bf-estado-sim').textContent = 'Ejecutando TX con precodificación MRT (CSI en TX) → canal → detector...';
+    $('bf-estado-sim').className = 'estado';
+    const payload = {
+      bw_mhz: parseFloat($('bf-bw').value),
+      delta_f_khz: parseFloat($('bf-df').value),
+      tipo_cp: $('bf-cp').value,
+      snr_db: parseFloat($('bf-snr').value),
+      modulacion: $('bf-modulacion').value,
+      config: $('bf-config').value,
+    };
+    try {
+      const r = await fetch('/simular_beamforming', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const j = await r.json();
+      if (j.error) throw new Error(j.error);
+      pintarResultados(j);
+      $('bf-estado-sim').textContent = 'Simulación completada ✓';
+      $('bf-estado-sim').className = 'estado ok';
+    } catch (e) {
+      $('bf-estado-sim').textContent = 'Error: ' + e.message;
+      $('bf-estado-sim').className = 'estado err';
+    } finally {
+      $('bf-btn-simular').disabled = false;
+      $('bf-btn-simular').textContent = 'Simular Transmisión (Beamforming)';
+    }
+  }
+  function pintarResultados(j) {
+    $('bf-zona-resultados').style.display = 'block';
+    $('bf-img-tx').src = j.imagen_original_b64;
+    $('bf-img-rx').src = j.imagen_recuperada_b64;
+    $('bf-ber-valor').textContent = (j.ber * 100).toFixed(3) + ' %';
+    const configTxt = (j.config || '').replace('x', '×');
+    $('bf-ber-detalle').textContent =
+      `${j.bits_erroneos.toLocaleString()} / ${j.bits_transmitidos.toLocaleString()} bits — ${j.n_simbolos_ofdm} símbolos OFDM — BF ${configTxt} — SNR ${j.snr_db} dB`;
+    $('bf-titulo-despues').textContent = `Beamforming ${configTxt}`;
+    if (j.constelacion_rx_antes) {
+      dibujarNube('bf-constelacion-antes-canvas', j.constelacion_rx_antes, j.modulacion, 'rgba(216,42,42,0.45)');
+    }
+    dibujarNube('bf-constelacion-despues-canvas', j.constelacion_rx, j.modulacion, 'rgba(24,163,75,0.5)');
+    const beraTxt = (typeof j.ber_antes === 'number') ? ` (BER sin beamforming ≈ ${(j.ber_antes * 100).toFixed(3)} %)` : '';
+    $('bf-resumen-constelacion').textContent =
+      `Izquierda: 1 sola antena TX con ZF (dispersa por el desvanecimiento)${beraTxt}. Derecha: beamforming ${configTxt} (nube más compacta = menor error gracias a la ganancia de arreglo + diversidad en TX).`;
+    renderKV(j.parametros);
+  }
+
+  // ---------- Monte Carlo (órdenes BF + overlay comparativo) ----------
+  async function ejecutarMontecarlo() {
+    $('bf-btn-mc').disabled = true;
+    $('bf-btn-mc').innerHTML = '<span class="spinner"></span> Ejecutando Monte Carlo...';
+    $('bf-estado-sim').textContent = 'Monte Carlo: órdenes BF (1×1/2×1/4×1) + overlay BF/SFBC/MRC × 16 SNR × 8 corridas (puede tardar)...';
+    $('bf-estado-sim').className = 'estado';
+    const payload = {
+      bw_mhz: parseFloat($('bf-bw').value),
+      delta_f_khz: parseFloat($('bf-df').value),
+      tipo_cp: $('bf-cp').value,
+      modulacion: $('bf-modulacion').value,
+    };
+    try {
+      const r = await fetch('/montecarlo_beamforming', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const j = await r.json();
+      if (j.error) throw new Error(j.error);
+      pintarMC(j);
+      $('bf-estado-sim').textContent = 'Monte Carlo completado ✓';
+      $('bf-estado-sim').className = 'estado ok';
+    } catch (e) {
+      $('bf-estado-sim').textContent = 'Error: ' + e.message;
+      $('bf-estado-sim').className = 'estado err';
+    } finally {
+      $('bf-btn-mc').disabled = false;
+      $('bf-btn-mc').textContent = 'Monte Carlo (Beamforming)';
+    }
+  }
+  function construirGrafico(canvasId, series, claveEtiqueta, mapaColor, mapaEtiqueta, titulo) {
+    const PISO = 1e-5;
+    const datasets = series.map((s) => {
+      const clave = s[claveEtiqueta];
+      return {
+        label: mapaEtiqueta[clave] || clave,
+        data: s.ber_promedio.map((v, i) => ({ x: i, y: Math.max(v, PISO) })),
+        errorBars: s.ber_promedio.map((_, i) => ({
+          lo: Math.max(s.ic_inferior[i], PISO), hi: Math.max(s.ic_superior[i], PISO),
+        })),
+        borderColor: mapaColor[clave] || '#1E54E0',
+        backgroundColor: mapaColor[clave] || '#1E54E0',
+        pointRadius: 4, tension: 0.15, fill: false,
+      };
+    });
+    return new Chart($(canvasId).getContext('2d'), {
+      type: 'line',
+      data: { datasets },
+      options: {
+        responsive: true, maintainAspectRatio: false, animation: false,
+        plugins: {
+          legend: { position: 'top', labels: { font: { weight: 700 } } },
+          title: { display: !!titulo, text: titulo, font: { weight: 700, size: 13 } },
+          tooltip: {
+            callbacks: {
+              label: (ctx) => {
+                const eb = ctx.dataset.errorBars[ctx.dataIndex];
+                return `${ctx.dataset.label}: BER=${ctx.parsed.y.toExponential(2)}  IC95% [${eb.lo.toExponential(2)}, ${eb.hi.toExponential(2)}]`;
+              },
+            },
+          },
+        },
+        scales: {
+          x: { type: 'linear', title: { display: true, text: 'SNR de referencia (dB)', font: { weight: 700 } },
+               ticks: { stepSize: 1 }, min: -0.5, max: 15.5 },
+          y: { type: 'logarithmic', title: { display: true, text: 'BER (escala logarítmica)', font: { weight: 700 } },
+               min: PISO, max: 1 },
+        },
+      },
+      plugins: [PLUGIN_ERROR_BARS],
+    });
+  }
+  function pintarMC(j) {
+    $('bf-modal-mc').style.display = 'flex';
+    $('bf-mc-titulo').textContent = `Beamforming en TX (MRT) — BER vs SNR — ${j.modulacion}`;
+    if (estado.graficoMC) estado.graficoMC.destroy();
+    if (estado.graficoOverlay) estado.graficoOverlay.destroy();
+    estado.graficoMC = construirGrafico('bf-montecarlo-canvas', j.series_bf, 'config',
+      COLORES_BF, ETIQUETAS_BF, 'Órdenes de beamforming: diversidad + ganancia de arreglo');
+    estado.graficoOverlay = construirGrafico('bf-overlay-canvas', j.series_overlay, 'tecnica',
+      COLORES_OVERLAY, ETIQUETAS_OVERLAY, 'Mismo orden 2: BF y MRC (con CSI) ganan ~3 dB a SFBC');
+  }
+
+  // ---------- Descargar PNG (los dos gráficos apilados) ----------
+  function descargarMC() {
+    if (!estado.graficoMC) return;
+    const a = $('bf-montecarlo-canvas'), b = $('bf-overlay-canvas');
+    const tmp = document.createElement('canvas');
+    tmp.width = Math.max(a.width, b.width); tmp.height = a.height + b.height + 20;
+    const tctx = tmp.getContext('2d');
+    tctx.fillStyle = '#FFFFFF'; tctx.fillRect(0, 0, tmp.width, tmp.height);
+    tctx.drawImage(a, 0, 0);
+    tctx.drawImage(b, 0, a.height + 20);
+    const link = document.createElement('a');
+    link.download = `beamforming_ber_snr_${Date.now()}.png`;
+    link.href = tmp.toDataURL('image/png');
+    link.click();
+  }
+
+  // ---------- Cableado ----------
+  function bind() {
+    sincSNR();
+    $('bf-df').addEventListener('change', () => { actualizarOpcionesCP(); actualizarParametros(); validarCombinacion(); });
+    $('bf-bw').addEventListener('change', () => { actualizarParametros(); validarCombinacion(); });
+    $('bf-cp').addEventListener('change', actualizarParametros);
+    $('bf-modulacion').addEventListener('change', actualizarParametros);
+    $('bf-config').addEventListener('change', actualizarParametros);
+    $('bf-archivo-imagen').addEventListener('change', subirImagen);
+    $('bf-btn-simular').addEventListener('click', ejecutarSimulacion);
+    $('bf-btn-mc').addEventListener('click', ejecutarMontecarlo);
+    ['bf-img-tx', 'bf-img-rx'].forEach((k) => {
+      $(k).addEventListener('click', () => {
+        const lb = document.getElementById('lightbox');
+        document.getElementById('lightbox-img').src = $(k).src;
+        lb.style.display = 'flex';
+      });
+    });
+    $('bf-btn-cerrar-mc').addEventListener('click', () => { $('bf-modal-mc').style.display = 'none'; });
+    $('bf-btn-descargar-mc').addEventListener('click', descargarMC);
+    $('bf-modal-mc').addEventListener('click', (ev) => {
+      if (ev.target.id === 'bf-modal-mc') $('bf-modal-mc').style.display = 'none';
+    });
+    actualizarParametros();
+    $('bf-btn-simular').disabled = true;
+  }
+
+  return { bind, notificarImagen, cerrarModal: () => { $('bf-modal-mc').style.display = 'none'; } };
+}
+
 // =====================================================================
 // === CONFIGURACIÓN DE LOS DOS PANELES                              ===
 // =====================================================================
@@ -1289,11 +1600,13 @@ window.addEventListener('DOMContentLoaded', () => {
   });
   const panelMRC = crearPanelMRC();
   const panelSFBC = crearPanelSFBC();
-  paneles.push(panelOFDM, panelSCFDM, panelMRC, panelSFBC);
+  const panelBF = crearPanelBeamforming();
+  paneles.push(panelOFDM, panelSCFDM, panelMRC, panelSFBC, panelBF);
   panelOFDM.bind();
   panelSCFDM.bind();
   panelMRC.bind();
   panelSFBC.bind();
+  panelBF.bind();
   initTabs();
   initLightbox();
 
@@ -1305,6 +1618,7 @@ window.addEventListener('DOMContentLoaded', () => {
       panelSCFDM.cerrarModal();
       panelMRC.cerrarModal();
       panelSFBC.cerrarModal();
+      panelBF.cerrarModal();
     }
   });
 });
