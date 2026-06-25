@@ -88,7 +88,7 @@ def mapear_64qam(bits):
 
 
 # _____________________________________________________________________________________
-#  PRECODIFICAR MRT (EL PASO CLAVE EN EL TX)                                 Transmisión
+#  PRECODIFICAR MRT                                Transmisión
 #  Entran los símbolos s_grid (uno por subportadora) y la matriz de canal H (N_T × N_SC,
 #  una fila por antena TX) y salen las N_T rejillas a transmitir X (N_T × N_SC) y la
 #  ganancia efectiva del enlace 'norma' (N_SC):

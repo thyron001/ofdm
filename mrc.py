@@ -8,12 +8,27 @@
 
  La transmisión es OFDM normal. LO NUEVO está en la RECEPCIÓN: el mismo símbolo OFDM
  llega por n_rx antenas, cada una con su propio canal H_m[k] independiente y su propio
- ruido. El combinador MRC las junta ponderando cada antena por conj(H_m) y sumando:
+ ruido. La recepción tiene DOS pasos que conviene NO confundir:
 
-        X_est[k] = Σ_m conj(H_m[k]) · Y_m[k]  /  Σ_m |H_m[k]|²
+   1) Combinación MRC (diapositivas 122-126). Según la teoría, el peso óptimo de cada
+      antena es el conjugado de su canal, w_m = conj(H_m), porque w_MRC = h es lo que
+      maximiza la SNR tras la combinación. Con esos pesos las ramas se suman de forma
+      COHERENTE (se alinean en fase) y cada una pesa según su ganancia:
 
- Con 1 antena esto es la ecualización Zero-Forcing (Y/H); con más antenas sube la SNR
- efectiva y baja la tasa de error (ganancia de diversidad).
+              z[k] = Σ_m conj(H_m[k]) · Y_m[k]                  (esto es lo que dicen las diapositivas)
+
+   2) Normalización a la escala del símbolo (estimación de s, diapositiva 125). La suma
+      anterior vale z = (Σ_m |H_m|²)·X + ruido, o sea X escalado por la ganancia combinada.
+      Para poder DECIDIR los bits contra la constelación QAM de referencia se divide por
+      esa misma ganancia y así se recupera la estimación del símbolo transmitido:
+
+              X_est[k] = z[k] / Σ_m |H_m[k]|²
+
+      Con 1 antena este segundo paso es la ecualización Zero-Forcing (Y/H). La división es
+      un escalar real positivo: no cambia la SNR ni el orden de diversidad, solo reescala.
+
+ Con más antenas sube la SNR efectiva (∝ Σ|H_m|², la suma de las SNR de cada rama) y baja
+ la tasa de error: es la ganancia de diversidad de orden N_R (diapositiva 127).
 
  Flujo:
    bits → QAM → pilotos → IFFT+CP → [ n_rx canales + ruido ] → FFT → MRC → quitar pilotos → QAM → bits
@@ -178,19 +193,32 @@ def demodulacion_ofdm(simbolo_con_cp, indices_fft, n_fft, n_cp, n_sc):
 
 
 # _____________________________________________________________________________________
-#  COMBINACIÓN MRC (EL PASO CLAVE DE LA DIVERSIDAD EN RX)                     Recepción
-#  Entra una lista con un par (Y_m, H_m) por cada antena receptora y sale la estimación
-#  combinada de las subportadoras:
-#       X_est = Σ_m conj(H_m)·Y_m  /  Σ_m |H_m|²
-#  Con una sola antena coincide con la ecualización Zero-Forcing (Y/H).
+#  COMBINACIÓN MRC + NORMALIZACIÓN (EL PASO CLAVE DE LA DIVERSIDAD EN RX)     Recepción
+#  Entra una lista con un par (Y_m, H_m) por cada antena receptora. Son DOS pasos:
+#
+#    Paso 1 - MRC propiamente dicho (diapositivas 122-126). El peso de cada antena es
+#             w_m = conj(H_m), así que la combinación coherente es la suma ponderada:
+#                   z = Σ_m conj(H_m)·Y_m
+#             Esa suma vale (Σ|H_m|²)·X + ruido, es decir, X ESCALADO por la ganancia;
+#             todavía NO es la estimación del símbolo.
+#
+#    Paso 2 - Normalización (diapositiva 125): se divide z por Σ|H_m|² para devolver la
+#             estimación de X en su escala original, de modo que el demapeo QAM (que usa
+#             umbrales fijos) decida bien. Con una sola antena esto es Zero-Forcing (Y/H).
 # _____________________________________________________________________________________
 def combinar_mrc(recibidos):
     n_sc = len(recibidos[0][0])
-    num = np.zeros(n_sc, dtype=complex)      # Numerador: Σ conj(H_m)·Y_m
-    den = np.zeros(n_sc, dtype=float)        # Denominador: Σ |H_m|²
+    num = np.zeros(n_sc, dtype=complex)      # Paso 1: z = Σ conj(H_m)·Y_m  (combinación MRC)
+    den = np.zeros(n_sc, dtype=float)        #         Σ |H_m|²  (ganancia combinada del canal)
     for Y_m, H_m in recibidos:
-        num += np.conj(H_m) * Y_m            # Pondera y alinea en fase (combinación coherente)
-        den += np.abs(H_m) ** 2              # Suma de ganancias de canal
+        num += np.conj(H_m) * Y_m            # peso conj(H_m): alinea la fase y pondera por la ganancia
+        den += np.abs(H_m) ** 2              # acumula |H_m|² de todas las antenas
+
+    # Paso 2: divide por la ganancia combinada para devolver X_est en la escala del símbolo.
+    # El "+ 1e-12" es solo un SEGURO NUMÉRICO: si en una subportadora TODAS las antenas
+    # caen a la vez en un desvanecimiento profundo, Σ|H_m|² ≈ 0 y la división daría inf/NaN.
+    # Ese valor es tan pequeño que no afecta el resultado en las subportadoras normales;
+    # solo evita el "dividir entre cero" en el caso extremo.
     return num / (den + 1e-12)
 
 

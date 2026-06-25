@@ -1545,6 +1545,650 @@ function crearPanelBeamforming() {
 }
 
 // =====================================================================
+// === PANEL MULTIPLEXACIÓN ESPACIAL (MIMO) — Práctica 6             ===
+// =====================================================================
+// Panel propio (espejo de crearPanelBeamforming). El TX envía N_T flujos INDEPENDIENTES y el
+// RX los separa con ZF/MMSE/ML. Color de curva = receptor (arriba) o técnica (overlay del
+// trade-off diversidad/multiplexación).
+const COLORES_SMUX = { '1x1': '#888888', 'zf': '#D82A2A', 'mmse': '#1E54E0', 'ml': '#18A34B' };
+const ETIQUETAS_SMUX = { '1x1': '1×1 SISO (1 flujo)', 'zf': '2×2 ZF', 'mmse': '2×2 MMSE', 'ml': '2×2 ML' };
+const COLORES_OVERLAY_SMUX = { 'SMux 2x2': '#D82A2A', 'SFBC 2x2': '#E58A1A', 'MRC 1x2': '#18A34B' };
+const ETIQUETAS_OVERLAY_SMUX = {
+  'SMux 2x2': 'SMux 2×2 (2 flujos, ×2 tasa)', 'SFBC 2x2': 'SFBC 2×2 (1 flujo)', 'MRC 1x2': 'MRC 1×2 (1 flujo)',
+};
+const ETIQ_RECEPTOR = { 'zf': 'Zero-Forcing', 'mmse': 'MMSE', 'ml': 'Maximum-Likelihood' };
+
+function crearPanelSMUX() {
+  const $ = (id) => document.getElementById(id);
+  const estado = { imagenSubida: false, nBits: 0, graficoMC: null, graficoOverlay: null };
+
+  // ---------- Parámetros ----------
+  function validarCombinacion() {
+    const ok = !COMBINACIONES_NO_VALIDAS.has(`${$('smux-bw').value}_${$('smux-df').value}`);
+    $('smux-aviso-combinacion').style.display = ok ? 'none' : 'block';
+    return ok;
+  }
+  function actualizarOpcionesCP() {
+    const df = $('smux-df').value;
+    const cp = $('smux-cp');
+    if (df === '15') {
+      cp.innerHTML = '<option value="normal">Normal (4.7 µs)</option>' +
+                     '<option value="extendido">Extendido (16.67 µs)</option>';
+    } else {
+      cp.innerHTML = '<option value="extendido">Extendido (33.33 µs)</option>';
+    }
+  }
+  // El detector ML solo está disponible en 2×2 (en 4×4 hay demasiados candidatos).
+  function ajustarReceptor() {
+    const es2x2 = $('smux-config').value === '2x2';
+    const optML = $('smux-receptor').querySelector('option[value="ml"]');
+    if (optML) optML.disabled = !es2x2;
+    if (!es2x2 && $('smux-receptor').value === 'ml') $('smux-receptor').value = 'mmse';
+  }
+  async function actualizarParametros() {
+    if (!validarCombinacion()) {
+      $('smux-kv-params').innerHTML = '<div class="kv"><div class="kv-label">Combinación inválida</div></div>';
+      return;
+    }
+    const payload = {
+      bw_mhz: parseFloat($('smux-bw').value),
+      delta_f_khz: parseFloat($('smux-df').value),
+      tipo_cp: $('smux-cp').value,
+      modulacion: $('smux-modulacion').value,
+      n_bits: estado.nBits,
+    };
+    try {
+      const r = await fetch('/calcular_parametros', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const j = await r.json();
+      if (j.error) {
+        $('smux-kv-params').innerHTML = `<div class="kv"><div class="kv-label">Error</div><div class="kv-valor" style="font-size:13px">${j.error}</div></div>`;
+        return;
+      }
+      renderKV(j);
+    } catch (e) { console.error(e); }
+  }
+  function renderKV(p, extras = {}) {
+    const nL = parseInt(($('smux-config').value || '2x2').split('x')[0]);
+    const items = [
+      ['Subportadoras útiles (N_SC)', p.n_sc],
+      ['Tamaño de la FFT (N_FFT)', p.n_fft],
+      ['Frecuencia de muestreo (fs)', (p.fs / 1e6).toFixed(3) + ' MHz'],
+      ['Muestras de prefijo cíclico (N_CP)', p.n_cp],
+      ['Antenas (N_T × N_R)', $('smux-config').value.replace('x', ' × ')],
+      ['Flujos espaciales (N_L)', nL],
+      ['Símbolos QAM por uso de canal', (p.n_sc * nL).toLocaleString() + ` (×${nL} vs SISO)`],
+      ['Bits totales de la imagen', (estado.nBits || 0).toLocaleString()],
+      ['Modulación aplicada', $('smux-modulacion').value],
+      ['Receptor', ETIQ_RECEPTOR[$('smux-receptor').value] || $('smux-receptor').value],
+    ];
+    if (extras.tiempo_aire_s != null) items.push(['Tiempo de transmisión (aire)', formatearTiempo(extras.tiempo_aire_s)]);
+    if (extras.throughput_bps != null) items.push(['Throughput', (extras.throughput_bps / 1e6).toFixed(2) + ' Mb/s']);
+    if (extras.capacidad_mimo_bps_hz != null) {
+      items.push(['Capacidad MIMO (teórica)', extras.capacidad_mimo_bps_hz.toFixed(2) + ' b/s/Hz']);
+      items.push(['Capacidad SISO (teórica)', extras.capacidad_siso_bps_hz.toFixed(2) + ' b/s/Hz']);
+    }
+    $('smux-kv-params').innerHTML = items.map(([l, v]) =>
+      `<div class="kv"><div class="kv-label">${l}</div><div class="kv-valor">${v}</div></div>`
+    ).join('') +
+      '<div class="kv" style="grid-column:1/-1"><div class="kv-label" style="font-size:12px">' +
+      'Multiplexación espacial: N_L flujos independientes (sin pilotos), reparto de potencia 1/√N_T. La capacidad crece LINEALMENTE con el nº de antenas.' +
+      '</div></div>';
+  }
+
+  // ---------- SNR slider ----------
+  function sincSNR() {
+    $('smux-snr').addEventListener('input', () => { $('smux-snr-num').value = $('smux-snr').value; });
+    $('smux-snr-num').addEventListener('input', () => {
+      let v = parseInt($('smux-snr-num').value || '0');
+      if (v < 0) v = 0; if (v > 100) v = 100;
+      $('smux-snr').value = v;
+    });
+  }
+
+  // ---------- Imagen ----------
+  async function subirImagen(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    const fd = new FormData();
+    fd.append('imagen', file);
+    $('smux-info-imagen').textContent = 'Subiendo...';
+    const r = await fetch('/subir_imagen', { method: 'POST', body: fd });
+    const j = await r.json();
+    if (j.error) {
+      $('smux-info-imagen').textContent = 'Error: ' + j.error;
+      $('smux-info-imagen').className = 'estado err';
+      return;
+    }
+    broadcastImagen(j);   // actualiza esta pestaña y las otras
+  }
+  function notificarImagen(info) {
+    estado.imagenSubida = true;
+    estado.nBits = info.n_bits;
+    if (info.preview_b64) {
+      $('smux-preview-imagen').src = info.preview_b64;
+      $('smux-preview-imagen').style.display = 'block';
+    }
+    $('smux-info-imagen').className = 'estado ok';
+    $('smux-info-imagen').textContent =
+      `${info.ancho}×${info.alto}, ${info.canales} canal(es), ${info.n_bits.toLocaleString()} bits ✓`;
+    $('smux-btn-simular').disabled = false;
+    actualizarParametros();
+  }
+
+  // ---------- Nube de constelación RX ----------
+  function dibujarNube(canvasId, puntos, mod, color) {
+    const cv = $(canvasId);
+    const ctx = cv.getContext('2d');
+    const W = cv.width, H = cv.height;
+    ctx.clearRect(0, 0, W, H);
+    const lim = mod === 'QPSK' ? 1.6 : (mod === '16-QAM' ? 1.8 : 2.0);
+    const sx = (x) => W / 2 + (x / lim) * (W / 2 - 10);
+    const sy = (y) => H / 2 - (y / lim) * (H / 2 - 10);
+    ctx.strokeStyle = '#E4EAF0'; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(W / 2, 0); ctx.lineTo(W / 2, H);
+    ctx.moveTo(0, H / 2); ctx.lineTo(W, H / 2); ctx.stroke();
+    ctx.fillStyle = color;
+    for (let i = 0; i < puntos.real.length; i++) {
+      ctx.beginPath(); ctx.arc(sx(puntos.real[i]), sy(puntos.imag[i]), 1.6, 0, Math.PI * 2); ctx.fill();
+    }
+  }
+
+  // ---------- Simulación única (imagen + constelaciones mezclado vs separado) ----------
+  async function ejecutarSimulacion() {
+    if (!estado.imagenSubida) { alert('Sube una imagen primero'); return; }
+    $('smux-btn-simular').disabled = true;
+    $('smux-btn-simular').innerHTML = '<span class="spinner"></span> Simulando...';
+    $('smux-estado-sim').textContent = 'Ejecutando TX MIMO (N_T flujos) → canal → detector (separación de flujos)...';
+    $('smux-estado-sim').className = 'estado';
+    const payload = {
+      bw_mhz: parseFloat($('smux-bw').value),
+      delta_f_khz: parseFloat($('smux-df').value),
+      tipo_cp: $('smux-cp').value,
+      snr_db: parseFloat($('smux-snr').value),
+      modulacion: $('smux-modulacion').value,
+      config: $('smux-config').value,
+      receptor: $('smux-receptor').value,
+    };
+    try {
+      const r = await fetch('/simular_smux', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const j = await r.json();
+      if (j.error) throw new Error(j.error);
+      pintarResultados(j);
+      $('smux-estado-sim').textContent = 'Simulación completada ✓';
+      $('smux-estado-sim').className = 'estado ok';
+    } catch (e) {
+      $('smux-estado-sim').textContent = 'Error: ' + e.message;
+      $('smux-estado-sim').className = 'estado err';
+    } finally {
+      $('smux-btn-simular').disabled = false;
+      $('smux-btn-simular').textContent = 'Simular Transmisión (MIMO)';
+    }
+  }
+  function pintarResultados(j) {
+    $('smux-zona-resultados').style.display = 'block';
+    $('smux-img-tx').src = j.imagen_original_b64;
+    $('smux-img-rx').src = j.imagen_recuperada_b64;
+    $('smux-ber-valor').textContent = (j.ber * 100).toFixed(3) + ' %';
+    const configTxt = (j.config || '').replace('x', '×');
+    const recTxt = ETIQ_RECEPTOR[j.receptor] || j.receptor;
+    $('smux-ber-detalle').textContent =
+      `${j.bits_erroneos.toLocaleString()} / ${j.bits_transmitidos.toLocaleString()} bits — ${j.n_simbolos_ofdm} usos de canal — MIMO ${configTxt} · ${recTxt} — SNR ${j.snr_db} dB`;
+    $('smux-bloque-detector').innerHTML = `Detector<br>${(j.receptor || 'zf').toUpperCase()}`;
+    $('smux-titulo-despues').textContent = `Flujos separados (${(j.receptor || 'zf').toUpperCase()})`;
+    if (j.constelacion_rx_antes) {
+      dibujarNube('smux-constelacion-antes-canvas', j.constelacion_rx_antes, j.modulacion, 'rgba(216,42,42,0.40)');
+    }
+    dibujarNube('smux-constelacion-despues-canvas', j.constelacion_rx, j.modulacion, 'rgba(24,163,75,0.5)');
+    const beraTxt = (typeof j.ber_antes === 'number') ? `${(j.ber_antes * 100).toFixed(3)} %` : '—';
+    const condTxt = (typeof j.cond_promedio === 'number') ? j.cond_promedio.toFixed(2) : '—';
+    $('smux-resumen-constelacion').textContent =
+      `Izquierda: lo recibido en una antena con los ${j.n_flujos} flujos MEZCLADOS (nube difusa). ` +
+      `Derecha: tras el detector ${recTxt}, los flujos quedan SEPARADOS. ` +
+      `Nº de condición medio de H ≈ ${condTxt} (mayor ⇒ más realce de ruido en ZF). ` +
+      `BER de referencia SISO 1×1 ≈ ${beraTxt}: la multiplexación tiene PEOR BER pero ${j.n_flujos}× la tasa.`;
+    renderKV(j.parametros, {
+      tiempo_aire_s: j.tiempo_aire_s, throughput_bps: j.throughput_bps,
+      capacidad_mimo_bps_hz: j.capacidad_mimo_bps_hz, capacidad_siso_bps_hz: j.capacidad_siso_bps_hz,
+    });
+  }
+
+  // ---------- Monte Carlo (receptores + overlay del trade-off) ----------
+  async function ejecutarMontecarlo() {
+    $('smux-btn-mc').disabled = true;
+    $('smux-btn-mc').innerHTML = '<span class="spinner"></span> Ejecutando Monte Carlo...';
+    $('smux-estado-sim').textContent = 'Monte Carlo: receptores 2×2 (ZF/MMSE/ML) + overlay SMux/SFBC/MRC × 16 SNR × 8 corridas (puede tardar)...';
+    $('smux-estado-sim').className = 'estado';
+    const payload = {
+      bw_mhz: parseFloat($('smux-bw').value),
+      delta_f_khz: parseFloat($('smux-df').value),
+      tipo_cp: $('smux-cp').value,
+      modulacion: $('smux-modulacion').value,
+    };
+    try {
+      const r = await fetch('/montecarlo_smux', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const j = await r.json();
+      if (j.error) throw new Error(j.error);
+      pintarMC(j);
+      $('smux-estado-sim').textContent = 'Monte Carlo completado ✓';
+      $('smux-estado-sim').className = 'estado ok';
+    } catch (e) {
+      $('smux-estado-sim').textContent = 'Error: ' + e.message;
+      $('smux-estado-sim').className = 'estado err';
+    } finally {
+      $('smux-btn-mc').disabled = false;
+      $('smux-btn-mc').textContent = 'Monte Carlo (Multiplexación)';
+    }
+  }
+  function construirGrafico(canvasId, series, claveEtiqueta, mapaColor, mapaEtiqueta, titulo) {
+    const PISO = 1e-5;
+    const datasets = series.map((s) => {
+      const clave = s[claveEtiqueta];
+      return {
+        label: mapaEtiqueta[clave] || clave,
+        data: s.ber_promedio.map((v, i) => ({ x: i, y: Math.max(v, PISO) })),
+        errorBars: s.ber_promedio.map((_, i) => ({
+          lo: Math.max(s.ic_inferior[i], PISO), hi: Math.max(s.ic_superior[i], PISO),
+        })),
+        borderColor: mapaColor[clave] || '#1E54E0',
+        backgroundColor: mapaColor[clave] || '#1E54E0',
+        pointRadius: 4, tension: 0.15, fill: false,
+      };
+    });
+    return new Chart($(canvasId).getContext('2d'), {
+      type: 'line',
+      data: { datasets },
+      options: {
+        responsive: true, maintainAspectRatio: false, animation: false,
+        plugins: {
+          legend: { position: 'top', labels: { font: { weight: 700 } } },
+          title: { display: !!titulo, text: titulo, font: { weight: 700, size: 13 } },
+          tooltip: {
+            callbacks: {
+              label: (ctx) => {
+                const eb = ctx.dataset.errorBars[ctx.dataIndex];
+                return `${ctx.dataset.label}: BER=${ctx.parsed.y.toExponential(2)}  IC95% [${eb.lo.toExponential(2)}, ${eb.hi.toExponential(2)}]`;
+              },
+            },
+          },
+        },
+        scales: {
+          x: { type: 'linear', title: { display: true, text: 'SNR recibida (dB)', font: { weight: 700 } },
+               ticks: { stepSize: 1 }, min: -0.5, max: 15.5 },
+          y: { type: 'logarithmic', title: { display: true, text: 'BER (escala logarítmica)', font: { weight: 700 } },
+               min: PISO, max: 1 },
+        },
+      },
+      plugins: [PLUGIN_ERROR_BARS],
+    });
+  }
+  function pintarMC(j) {
+    $('smux-modal-mc').style.display = 'flex';
+    $('smux-mc-titulo').textContent = `Multiplexación espacial — BER vs SNR — ${j.modulacion}`;
+    if (estado.graficoMC) estado.graficoMC.destroy();
+    if (estado.graficoOverlay) estado.graficoOverlay.destroy();
+    estado.graficoMC = construirGrafico('smux-montecarlo-canvas', j.series_smux, 'receptor',
+      COLORES_SMUX, ETIQUETAS_SMUX, 'Receptores 2×2: ML ≤ MMSE ≤ ZF, todos por debajo de SISO');
+    estado.graficoOverlay = construirGrafico('smux-overlay-canvas', j.series_overlay, 'tecnica',
+      COLORES_OVERLAY_SMUX, ETIQUETAS_OVERLAY_SMUX, 'Trade-off: multiplexación (×2 tasa) vs diversidad (mejor BER)');
+  }
+
+  // ---------- Descargar PNG (los dos gráficos apilados) ----------
+  function descargarMC() {
+    if (!estado.graficoMC) return;
+    const a = $('smux-montecarlo-canvas'), b = $('smux-overlay-canvas');
+    const tmp = document.createElement('canvas');
+    tmp.width = Math.max(a.width, b.width); tmp.height = a.height + b.height + 20;
+    const tctx = tmp.getContext('2d');
+    tctx.fillStyle = '#FFFFFF'; tctx.fillRect(0, 0, tmp.width, tmp.height);
+    tctx.drawImage(a, 0, 0);
+    tctx.drawImage(b, 0, a.height + 20);
+    const link = document.createElement('a');
+    link.download = `mimo_smux_ber_snr_${Date.now()}.png`;
+    link.href = tmp.toDataURL('image/png');
+    link.click();
+  }
+
+  // ---------- Cableado ----------
+  function bind() {
+    sincSNR();
+    ajustarReceptor();
+    $('smux-df').addEventListener('change', () => { actualizarOpcionesCP(); actualizarParametros(); validarCombinacion(); });
+    $('smux-bw').addEventListener('change', () => { actualizarParametros(); validarCombinacion(); });
+    $('smux-cp').addEventListener('change', actualizarParametros);
+    $('smux-modulacion').addEventListener('change', actualizarParametros);
+    $('smux-config').addEventListener('change', () => { ajustarReceptor(); actualizarParametros(); });
+    $('smux-receptor').addEventListener('change', actualizarParametros);
+    $('smux-archivo-imagen').addEventListener('change', subirImagen);
+    $('smux-btn-simular').addEventListener('click', ejecutarSimulacion);
+    $('smux-btn-mc').addEventListener('click', ejecutarMontecarlo);
+    ['smux-img-tx', 'smux-img-rx'].forEach((k) => {
+      $(k).addEventListener('click', () => {
+        const lb = document.getElementById('lightbox');
+        document.getElementById('lightbox-img').src = $(k).src;
+        lb.style.display = 'flex';
+      });
+    });
+    $('smux-btn-cerrar-mc').addEventListener('click', () => { $('smux-modal-mc').style.display = 'none'; });
+    $('smux-btn-descargar-mc').addEventListener('click', descargarMC);
+    $('smux-modal-mc').addEventListener('click', (ev) => {
+      if (ev.target.id === 'smux-modal-mc') $('smux-modal-mc').style.display = 'none';
+    });
+    actualizarParametros();
+    $('smux-btn-simular').disabled = true;
+  }
+
+  return { bind, notificarImagen, cerrarModal: () => { $('smux-modal-mc').style.display = 'none'; } };
+}
+
+// =====================================================================
+// === PANEL CODIFICACIÓN DE CANAL (Práctica 7)                      ===
+// =====================================================================
+// Panel propio. La imagen se transmite con el código elegido y SIN codificar sobre la misma
+// cadena OFDM + Pedestrian A; se comparan ambas recuperaciones (ganancia de codificación).
+const COLORES_CODIF = { ninguno: '#D82A2A', convolucional: '#E58A1A', turbo: '#18A34B' };
+const ETIQUETAS_CODIF = { ninguno: 'Sin codificar', convolucional: 'Convolucional (Viterbi)', turbo: 'Turbo (BCJR)' };
+
+function crearPanelCodif() {
+  const $ = (id) => document.getElementById(id);
+  const estado = { imagenSubida: false, nBits: 0, graficoMC: null };
+
+  function validarCombinacion() {
+    const ok = !COMBINACIONES_NO_VALIDAS.has(`${$('codif-bw').value}_${$('codif-df').value}`);
+    $('codif-aviso-combinacion').style.display = ok ? 'none' : 'block';
+    return ok;
+  }
+  function actualizarOpcionesCP() {
+    const df = $('codif-df').value;
+    const cp = $('codif-cp');
+    if (df === '15') {
+      cp.innerHTML = '<option value="normal">Normal (4.7 µs)</option>' +
+                     '<option value="extendido">Extendido (16.67 µs)</option>';
+    } else {
+      cp.innerHTML = '<option value="extendido">Extendido (33.33 µs)</option>';
+    }
+  }
+  async function actualizarParametros() {
+    if (!validarCombinacion()) {
+      $('codif-kv-params').innerHTML = '<div class="kv"><div class="kv-label">Combinación inválida</div></div>';
+      return;
+    }
+    const payload = {
+      bw_mhz: parseFloat($('codif-bw').value),
+      delta_f_khz: parseFloat($('codif-df').value),
+      tipo_cp: $('codif-cp').value,
+      modulacion: $('codif-modulacion').value,
+      n_bits: estado.nBits,
+    };
+    try {
+      const r = await fetch('/calcular_parametros', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const j = await r.json();
+      if (j.error) {
+        $('codif-kv-params').innerHTML = `<div class="kv"><div class="kv-label">Error</div><div class="kv-valor" style="font-size:13px">${j.error}</div></div>`;
+        return;
+      }
+      renderKV(j);
+    } catch (e) { console.error(e); }
+  }
+  function renderKV(p) {
+    const bloques = estado.nBits ? Math.ceil(estado.nBits / 488) : 0;
+    const items = [
+      ['Subportadoras útiles (N_SC)', p.n_sc],
+      ['Tamaño de la FFT (N_FFT)', p.n_fft],
+      ['Frecuencia de muestreo (fs)', (p.fs / 1e6).toFixed(3) + ' MHz'],
+      ['Muestras de prefijo cíclico (N_CP)', p.n_cp],
+      ['Código de canal', ETIQUETAS_CODIF[$('codif-codigo').value] || $('codif-codigo').value],
+      ['Tasa del código', '1/3'],
+      ['Modulación aplicada', $('codif-modulacion').value],
+      ['Bits totales de la imagen', (estado.nBits || 0).toLocaleString()],
+      ['Bloques de código (488 bits + CRC-24)', bloques.toLocaleString()],
+    ];
+    $('codif-kv-params').innerHTML = items.map(([l, v]) =>
+      `<div class="kv"><div class="kv-label">${l}</div><div class="kv-valor">${v}</div></div>`
+    ).join('') +
+      '<div class="kv" style="grid-column:1/-1"><div class="kv-label" style="font-size:12px">' +
+      'Cada bloque lleva CRC-24A + código R=1/3 (3 bits de salida por bit de info). La transmisión codificada usa ~3× símbolos OFDM.' +
+      '</div></div>';
+  }
+
+  function sincSNR() {
+    $('codif-snr').addEventListener('input', () => { $('codif-snr-num').value = $('codif-snr').value; });
+    $('codif-snr-num').addEventListener('input', () => {
+      let v = parseInt($('codif-snr-num').value || '0');
+      if (v < 0) v = 0; if (v > 100) v = 100;
+      $('codif-snr').value = v;
+    });
+  }
+
+  async function subirImagen(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    const fd = new FormData();
+    fd.append('imagen', file);
+    $('codif-info-imagen').textContent = 'Subiendo...';
+    const r = await fetch('/subir_imagen', { method: 'POST', body: fd });
+    const j = await r.json();
+    if (j.error) {
+      $('codif-info-imagen').textContent = 'Error: ' + j.error;
+      $('codif-info-imagen').className = 'estado err';
+      return;
+    }
+    broadcastImagen(j);
+  }
+  function notificarImagen(info) {
+    estado.imagenSubida = true;
+    estado.nBits = info.n_bits;
+    if (info.preview_b64) {
+      $('codif-preview-imagen').src = info.preview_b64;
+      $('codif-preview-imagen').style.display = 'block';
+    }
+    $('codif-info-imagen').className = 'estado ok';
+    $('codif-info-imagen').textContent =
+      `${info.ancho}×${info.alto}, ${info.canales} canal(es), ${info.n_bits.toLocaleString()} bits ✓`;
+    $('codif-btn-simular').disabled = false;
+    actualizarParametros();
+  }
+
+  function dibujarNube(canvasId, puntos, mod, color) {
+    const cv = $(canvasId);
+    const ctx = cv.getContext('2d');
+    const W = cv.width, H = cv.height;
+    ctx.clearRect(0, 0, W, H);
+    const lim = mod === 'QPSK' ? 1.6 : 1.8;
+    const sx = (x) => W / 2 + (x / lim) * (W / 2 - 10);
+    const sy = (y) => H / 2 - (y / lim) * (H / 2 - 10);
+    ctx.strokeStyle = '#E4EAF0'; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(W / 2, 0); ctx.lineTo(W / 2, H);
+    ctx.moveTo(0, H / 2); ctx.lineTo(W, H / 2); ctx.stroke();
+    ctx.fillStyle = color;
+    for (let i = 0; i < puntos.real.length; i++) {
+      ctx.beginPath(); ctx.arc(sx(puntos.real[i]), sy(puntos.imag[i]), 1.6, 0, Math.PI * 2); ctx.fill();
+    }
+  }
+
+  async function ejecutarSimulacion() {
+    if (!estado.imagenSubida) { alert('Sube una imagen primero'); return; }
+    $('codif-btn-simular').disabled = true;
+    $('codif-btn-simular').innerHTML = '<span class="spinner"></span> Simulando...';
+    $('codif-estado-sim').textContent = 'Codificando, transmitiendo y decodificando (turbo puede tardar)...';
+    $('codif-estado-sim').className = 'estado';
+    const payload = {
+      bw_mhz: parseFloat($('codif-bw').value),
+      delta_f_khz: parseFloat($('codif-df').value),
+      tipo_cp: $('codif-cp').value,
+      snr_db: parseFloat($('codif-snr').value),
+      modulacion: $('codif-modulacion').value,
+      codigo: $('codif-codigo').value,
+    };
+    try {
+      const r = await fetch('/simular_codif', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const j = await r.json();
+      if (j.error) throw new Error(j.error);
+      pintarResultados(j);
+      $('codif-estado-sim').textContent = 'Simulación completada ✓';
+      $('codif-estado-sim').className = 'estado ok';
+    } catch (e) {
+      $('codif-estado-sim').textContent = 'Error: ' + e.message;
+      $('codif-estado-sim').className = 'estado err';
+    } finally {
+      $('codif-btn-simular').disabled = false;
+      $('codif-btn-simular').textContent = 'Simular Transmisión (codificado vs sin codificar)';
+    }
+  }
+  function pintarResultados(j) {
+    $('codif-zona-resultados').style.display = 'block';
+    $('codif-img-tx').src = j.imagen_original_b64;
+    $('codif-img-rx').src = j.imagen_recuperada_b64;
+    $('codif-img-rx-sin').src = j.imagen_recuperada_sin_b64;
+    const etq = ETIQUETAS_CODIF[j.codigo] || j.codigo;
+    $('codif-cap-rx').textContent = `Recuperada (${etq})`;
+    $('codif-ber-valor').textContent = (j.ber * 100).toFixed(3) + ' %';
+    $('codif-ber-detalle').textContent =
+      `${j.bits_erroneos.toLocaleString()} / ${j.bits_transmitidos.toLocaleString()} bits — ${j.n_simbolos_ofdm} símbolos OFDM — ${etq} — SNR ${j.snr_db} dB`;
+    const mejora = j.ber_sin > 0 ? (j.ber_sin / Math.max(j.ber, 1e-9)) : Infinity;
+    const mejoraTxt = isFinite(mejora) ? `${mejora.toFixed(1)}×` : '∞';
+    $('codif-resumen').innerHTML =
+      `Sin codificar: BER ≈ <strong>${(j.ber_sin * 100).toFixed(3)} %</strong> (${j.bits_erroneos_sin.toLocaleString()} bits err). ` +
+      `Con ${etq}: BER ≈ <strong>${(j.ber * 100).toFixed(3)} %</strong> ` +
+      `(reducción ≈ <strong>${mejoraTxt}</strong>). ` +
+      `Bloques con error detectado por CRC: <strong>${j.n_bloques_error} / ${j.n_bloques}</strong>.`;
+    if (j.constelacion_rx) {
+      dibujarNube('codif-constelacion-canvas', j.constelacion_rx, j.modulacion, 'rgba(30,84,224,0.45)');
+    }
+    $('codif-titulo-constelacion').textContent =
+      `Símbolos ${j.modulacion} ecualizados (ZF) que entran al demapeo suave (LLR)`;
+    renderKV(j.parametros);
+  }
+
+  async function ejecutarMontecarlo() {
+    $('codif-btn-mc').disabled = true;
+    $('codif-btn-mc').innerHTML = '<span class="spinner"></span> Ejecutando Monte Carlo...';
+    $('codif-estado-sim').textContent = 'Monte Carlo: 3 curvas (sin codificar / convolucional / turbo) × 16 SNR × 6 corridas (puede tardar)...';
+    $('codif-estado-sim').className = 'estado';
+    const payload = {
+      bw_mhz: parseFloat($('codif-bw').value),
+      delta_f_khz: parseFloat($('codif-df').value),
+      tipo_cp: $('codif-cp').value,
+      modulacion: $('codif-modulacion').value,
+    };
+    try {
+      const r = await fetch('/montecarlo_codif', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const j = await r.json();
+      if (j.error) throw new Error(j.error);
+      pintarMC(j);
+      $('codif-estado-sim').textContent = 'Monte Carlo completado ✓';
+      $('codif-estado-sim').className = 'estado ok';
+    } catch (e) {
+      $('codif-estado-sim').textContent = 'Error: ' + e.message;
+      $('codif-estado-sim').className = 'estado err';
+    } finally {
+      $('codif-btn-mc').disabled = false;
+      $('codif-btn-mc').textContent = 'Monte Carlo (ganancia de codificación)';
+    }
+  }
+  function pintarMC(j) {
+    $('codif-modal-mc').style.display = 'flex';
+    $('codif-mc-titulo').textContent = `Codificación de canal — BER vs SNR — ${j.modulacion}`;
+    if (estado.graficoMC) estado.graficoMC.destroy();
+    const PISO = 1e-5;
+    const datasets = j.series_ber.map((s) => ({
+      label: ETIQUETAS_CODIF[s.codigo] || s.codigo,
+      data: s.ber_promedio.map((v, i) => ({ x: j.snr_valores[i], y: Math.max(v, PISO) })),
+      errorBars: s.ber_promedio.map((_, i) => ({
+        lo: Math.max(s.ic_inferior[i], PISO), hi: Math.max(s.ic_superior[i], PISO),
+      })),
+      borderColor: COLORES_CODIF[s.codigo] || '#1E54E0',
+      backgroundColor: COLORES_CODIF[s.codigo] || '#1E54E0',
+      pointRadius: 5, tension: 0.15, fill: false,
+    }));
+    estado.graficoMC = new Chart($('codif-montecarlo-canvas').getContext('2d'), {
+      type: 'line',
+      data: { datasets },
+      options: {
+        responsive: true, maintainAspectRatio: false, animation: false,
+        scales: {
+          x: { type: 'linear', title: { display: true, text: 'SNR recibida (dB)', font: { weight: 700 } },
+               ticks: { stepSize: 1 }, min: -0.5, max: 15.5 },
+          y: { type: 'logarithmic', title: { display: true, text: 'BER (escala logarítmica)', font: { weight: 700 } },
+               min: PISO, max: 1 },
+        },
+        plugins: {
+          legend: { position: 'top', labels: { font: { weight: 700 } } },
+          tooltip: {
+            callbacks: {
+              label: (ctx) => {
+                const eb = ctx.dataset.errorBars[ctx.dataIndex];
+                return `${ctx.dataset.label}: BER=${ctx.parsed.y.toExponential(2)}  IC95% [${eb.lo.toExponential(2)}, ${eb.hi.toExponential(2)}]`;
+              },
+            },
+          },
+        },
+      },
+      plugins: [PLUGIN_ERROR_BARS],
+    });
+  }
+
+  function descargarMC() {
+    if (!estado.graficoMC) return;
+    const src = $('codif-montecarlo-canvas');
+    const tmp = document.createElement('canvas');
+    tmp.width = src.width; tmp.height = src.height;
+    const tctx = tmp.getContext('2d');
+    tctx.fillStyle = '#FFFFFF'; tctx.fillRect(0, 0, tmp.width, tmp.height);
+    tctx.drawImage(src, 0, 0);
+    const link = document.createElement('a');
+    link.download = `codificacion_ber_snr_${Date.now()}.png`;
+    link.href = tmp.toDataURL('image/png');
+    link.click();
+  }
+
+  function bind() {
+    sincSNR();
+    $('codif-df').addEventListener('change', () => { actualizarOpcionesCP(); actualizarParametros(); validarCombinacion(); });
+    $('codif-bw').addEventListener('change', () => { actualizarParametros(); validarCombinacion(); });
+    $('codif-cp').addEventListener('change', actualizarParametros);
+    $('codif-modulacion').addEventListener('change', actualizarParametros);
+    $('codif-codigo').addEventListener('change', actualizarParametros);
+    $('codif-archivo-imagen').addEventListener('change', subirImagen);
+    $('codif-btn-simular').addEventListener('click', ejecutarSimulacion);
+    $('codif-btn-mc').addEventListener('click', ejecutarMontecarlo);
+    ['codif-img-tx', 'codif-img-rx', 'codif-img-rx-sin'].forEach((k) => {
+      $(k).addEventListener('click', () => {
+        const lb = document.getElementById('lightbox');
+        document.getElementById('lightbox-img').src = $(k).src;
+        lb.style.display = 'flex';
+      });
+    });
+    $('codif-btn-cerrar-mc').addEventListener('click', () => { $('codif-modal-mc').style.display = 'none'; });
+    $('codif-btn-descargar-mc').addEventListener('click', descargarMC);
+    $('codif-modal-mc').addEventListener('click', (ev) => {
+      if (ev.target.id === 'codif-modal-mc') $('codif-modal-mc').style.display = 'none';
+    });
+    actualizarParametros();
+    $('codif-btn-simular').disabled = true;
+  }
+
+  return { bind, notificarImagen, cerrarModal: () => { $('codif-modal-mc').style.display = 'none'; } };
+}
+
+// =====================================================================
 // === CONFIGURACIÓN DE LOS DOS PANELES                              ===
 // =====================================================================
 function idsConPrefijo(pre, extra = {}) {
@@ -1601,12 +2245,16 @@ window.addEventListener('DOMContentLoaded', () => {
   const panelMRC = crearPanelMRC();
   const panelSFBC = crearPanelSFBC();
   const panelBF = crearPanelBeamforming();
-  paneles.push(panelOFDM, panelSCFDM, panelMRC, panelSFBC, panelBF);
+  const panelSMUX = crearPanelSMUX();
+  const panelCodif = crearPanelCodif();
+  paneles.push(panelOFDM, panelSCFDM, panelMRC, panelSFBC, panelBF, panelSMUX, panelCodif);
   panelOFDM.bind();
   panelSCFDM.bind();
   panelMRC.bind();
   panelSFBC.bind();
   panelBF.bind();
+  panelSMUX.bind();
+  panelCodif.bind();
   initTabs();
   initLightbox();
 
@@ -1619,6 +2267,8 @@ window.addEventListener('DOMContentLoaded', () => {
       panelMRC.cerrarModal();
       panelSFBC.cerrarModal();
       panelBF.cerrarModal();
+      panelSMUX.cerrarModal();
+      panelCodif.cerrarModal();
     }
   });
 });

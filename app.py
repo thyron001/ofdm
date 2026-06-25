@@ -30,6 +30,7 @@ import io                                    # Buffers en memoria para imágenes
 import time                                  # Medición de tiempos de cómputo
 import base64                               # Codificar imágenes a texto (data URI)
 import math                                  # Funciones matemáticas escalares (ceil)
+import itertools                            # Producto cartesiano (candidatos del detector ML)
 from typing import Dict, Tuple              # Anotaciones de tipo para legibilidad
 
 import numpy as np                           # Cálculo numérico vectorizado (FFT, arrays)
@@ -930,6 +931,527 @@ def cadena_tx_beamforming_rx(bits_tx: np.ndarray, modulacion: str, params: Dict,
 
 
 # =====================================================================================
+# === [BLOQUE 6c] MULTIPLEXACIÓN ESPACIAL — Práctica 6 (MIMO, flujos independientes) ===
+# =====================================================================================
+# Multiplexación espacial (diapositivas Cap. 5, pág. 181-209): con N_T antenas TX y N_R
+# antenas RX se transmiten N_L = min(N_T, N_R) FLUJOS INDEPENDIENTES simultáneos (uno por
+# antena TX), multiplicando la TASA por N_L. Es la 4ª y última técnica MIMO del capítulo y,
+# a diferencia de las P3-P5 (que robustecen un solo flujo), aquí las antenas multiplican el
+# número de flujos. Modelo por subportadora: r̄[k] = H[k]·s̄[k] + n̄[k], con H[k] de N_R×N_T.
+# Cada antena TX se escala por 1/√N_T (potencia total constante → ~10·log10(N_T) dB menos por
+# flujo: el precio de duplicar la tasa). El receptor SEPARA los flujos con ZF, MMSE o ML.
+# Como SFBC/BF, NO usa pilotos (todas las subportadoras llevan datos, CSI genie en el RX).
+
+def capacidad_mimo_bps_hz(snr_db: float, n_tx: int, n_rx: int) -> float:
+    """
+    Capacidad normalizada C/BW (b/s/Hz) de un canal con N_T×N_R antenas, según la expresión
+    de la pág. 185:  C/BW = min(N_T,N_R)·log2(1 + (N_R/min(N_T,N_R))·SNR). Crece LINEALMENTE
+    con el nº de antenas (multiplexación), frente al crecimiento logarítmico de SISO/diversidad.
+    """
+    snr = 10 ** (snr_db / 10)
+    n_l = min(n_tx, n_rx)
+    return float(n_l * math.log2(1 + (n_rx / n_l) * snr))
+
+
+def _constelacion_qam(modulacion: str) -> np.ndarray:
+    """Genera los M = 2^bps símbolos ideales de la modulación (todos los patrones de bits)."""
+    bps = MODULACIONES[modulacion]["bits"]
+    M = 1 << bps
+    idx = np.arange(M)
+    bits = ((idx[:, None] >> np.arange(bps - 1, -1, -1)[None, :]) & 1).astype(np.uint8).reshape(-1)
+    return MODULACIONES[modulacion]["mapear"](bits)
+
+
+def _combos_smux(constelacion: np.ndarray, n_tx: int) -> np.ndarray:
+    """Producto cartesiano de N_T constelaciones: TODOS los vectores s̄ candidatos del ML (M^N_T × N_T)."""
+    return np.array(list(itertools.product(constelacion, repeat=n_tx)))
+
+
+def _detectar_smux(R: np.ndarray, H_full: np.ndarray, esc: float, receptor: str,
+                   carga_mmse: float, combos: np.ndarray = None) -> np.ndarray:
+    """
+    Separa los N_T flujos a partir de lo recibido. Trabaja VECTORIZADO sobre las N_SC
+    subportadoras a la vez (numpy resuelve un sistema 2×2 por subportadora en lote).
+      - R          : recibido por antena, forma (N_R, N_SC).
+      - H_full     : canal, forma (N_R, N_T, N_SC).
+      - esc        : factor 1/√N_T (se incorpora al canal efectivo H_g = esc·H, así el detector
+                     estima directamente s̄ de energía unitaria).
+      - carga_mmse : cargado de la diagonal del MMSE = N0/Es (varianza de ruido por subportadora
+                     entre energía de símbolo). Por la normalización OFDM vale (N_SC/N_FFT)/SNR,
+                     NO simplemente 1/SNR; si se usara 1/SNR el MMSE quedaría sobre-regularizado.
+    Detectores:  ZF (pseudoinversa), MMSE ((H_gᴴH_g + (N0/Es)·I)⁻¹H_gᴴ) y ML (mínima distancia).
+    Devuelve S_est de forma (N_T, N_SC).
+    """
+    n_rx, n_tx, n_sc = H_full.shape
+    Hg = np.transpose(H_full, (2, 0, 1)) * esc            # (N_SC, N_R, N_T): canal efectivo s̄→r̄
+    rs = np.transpose(R, (1, 0))[:, :, None]              # (N_SC, N_R, 1)
+
+    if receptor == "ml":
+        pred = Hg @ combos.T                              # (N_SC, N_R, M^N_T): r̄ esperado por candidato
+        dist = np.sum(np.abs(pred - rs) ** 2, axis=1)     # (N_SC, M^N_T): distancia a cada candidato
+        mejor = np.argmin(dist, axis=1)                  # (N_SC,): índice del candidato más probable
+        return combos[mejor].T                            # (N_T, N_SC)
+
+    HgH = np.conj(np.transpose(Hg, (0, 2, 1)))           # (N_SC, N_T, N_R): H_gᴴ
+    if receptor == "mmse":
+        A = HgH @ Hg + carga_mmse * np.eye(n_tx)          # (N_SC, N_T, N_T): H_gᴴH_g + (N0/Es)·I
+        W = np.linalg.solve(A, HgH)                       # (N_SC, N_T, N_R): filtro MMSE
+    else:                                                 # zf
+        W = np.linalg.pinv(Hg)                            # (N_SC, N_T, N_R): pseudoinversa de H_g
+    S = W @ rs                                            # (N_SC, N_T, 1): estimación de s̄[k]
+    return S[:, :, 0].T                                   # (N_T, N_SC)
+
+
+def cadena_tx_smux_rx(bits_tx: np.ndarray, modulacion: str, params: Dict,
+                      snr_db: float, rng: np.random.Generator,
+                      capturar_constelaciones: bool = False,
+                      n_tx: int = 2, n_rx: int = 2, receptor: str = "zf") -> Dict:
+    """
+    Núcleo de la Práctica 6 (multiplexación espacial). Es hermana de cadena_tx_beamforming_rx
+    pero el TX envía N_T flujos INDEPENDIENTES (no un solo flujo precodificado):
+
+      - n_tx == 1  -> SISO de referencia (1 flujo): canal Pedestrian A + ecualización ZF.
+      - n_tx >= 2  -> multiplexación espacial: cada uso de canal transporta N_T·N_SC símbolos
+                      (N_T flujos de N_SC símbolos), repartidos en potencia por 1/√N_T. Cada
+                      antena RX ve la suma de las N_T antenas por canales independientes y el
+                      detector elegido (ZF/MMSE/ML) separa los flujos por subportadora.
+                      La TASA se multiplica por N_T, a costa de peor BER a igual SNR.
+
+    Igual que SFBC/BF, NO intercala pilotos: todas las subportadoras llevan datos y el CSI es
+    genie en el RX. El ruido se calibra al recibido (no hay ganancia de arreglo que destacar,
+    a diferencia del piso fijo del beamforming).
+    """
+    mod = MODULACIONES[modulacion]
+    n_sc = params["n_sc"]
+    n_fft = params["n_fft"]
+    n_cp = params["n_cp"]
+    fs = params["fs"]
+    bps = mod["bits"]
+    esc = 1.0 / np.sqrt(max(n_tx, 1))                    # Reparto de potencia 1/√N_T entre antenas TX
+    n_sym_uso = n_sc * max(n_tx, 1)                      # Símbolos QAM por uso de canal (N_T·N_SC)
+
+    # --- TX: bits -> símbolos QAM (relleno a múltiplo de bps y de n_sym_uso) ---
+    falta = (-len(bits_tx)) % bps
+    if falta:
+        bits_tx_pad = np.concatenate([bits_tx, np.zeros(falta, dtype=np.uint8)])
+    else:
+        bits_tx_pad = bits_tx
+    simbolos_qam = mod["mapear"](bits_tx_pad)
+    falta_sim = (-len(simbolos_qam)) % n_sym_uso
+    if falta_sim:
+        simbolos_qam = np.concatenate([simbolos_qam, np.zeros(falta_sim, dtype=complex)])
+    n_ofdm = len(simbolos_qam) // n_sym_uso             # Nº de usos de canal a transmitir
+
+    # Candidatos del detector ML (solo si aplica): M^N_T vectores de N_T símbolos
+    combos = _combos_smux(_constelacion_qam(modulacion), n_tx) if (n_tx >= 2 and receptor == "ml") else None
+
+    constelacion_tx = simbolos_qam.copy() if capturar_constelaciones else None
+    simbolos_rx_datos = []                              # Constelación recuperada (después del detector)
+    simbolos_rx_antes = []                             # Recibido sin separar (flujos mezclados, antena 0)
+    cond_acum = []                                      # Número de condición medio de H (realce de ruido)
+    bits_rx_total = []
+
+    # Índices FFT de las n_sc subportadoras activas (no dependen de los datos)
+    _, indices_fft = modulacion_ofdm(np.zeros(n_sc, dtype=complex), n_fft, n_cp)
+    snr_lin = 10 ** (snr_db / 10)
+
+    for i in range(n_ofdm):
+        bloque = simbolos_qam[i * n_sym_uso:(i + 1) * n_sym_uso]
+
+        if n_tx <= 1:
+            # --- SISO de referencia (1 antena TX): canal + ecualización ZF ---
+            s_grid = bloque
+            H0 = generar_canal_pedestrian_a(n_fft, fs, indices_fft, rng)
+            senal_canal, _ = modulacion_ofdm(s_grid * H0, n_fft, n_cp)
+            senal_rx = agregar_ruido_awgn(senal_canal, snr_db, rng)
+            rejilla_rx = demodulacion_ofdm(senal_rx, indices_fft, n_fft, n_cp, n_sc)
+            datos_rx = rejilla_rx / (H0 + 1e-12)
+        else:
+            # --- Multiplexación espacial (N_T flujos independientes) ---
+            X = np.stack([esc * bloque[a::n_tx] for a in range(n_tx)])   # Rejilla por antena (N_T × N_SC)
+            H_full = np.zeros((n_rx, n_tx, n_sc), dtype=complex)          # Canal H[k] (N_R × N_T × N_SC)
+            for r in range(n_rx):
+                for t in range(n_tx):
+                    H_full[r, t] = generar_canal_pedestrian_a(n_fft, fs, indices_fft, rng)
+            R = np.zeros((n_rx, n_sc), dtype=complex)
+            pot_rx = 0.0
+            for r in range(n_rx):
+                senal = sum(modulacion_ofdm(X[t] * H_full[r, t], n_fft, n_cp)[0]   # antena t por su canal
+                            for t in range(n_tx))                                 # …suman en el aire
+                pot_rx += float(np.mean(np.abs(senal) ** 2))                       # potencia recibida (sin ruido)
+                senal = agregar_ruido_awgn(senal, snr_db, rng)
+                R[r] = demodulacion_ofdm(senal, indices_fft, n_fft, n_cp, n_sc)
+            # Cargado MMSE = N0/Es: la varianza de ruido por subportadora es
+            # (potencia_recibida/SNR)·(N_SC/N_FFT) por la normalización OFDM (medido y verificado).
+            carga_mmse = (pot_rx / n_rx) * (n_sc / n_fft) / snr_lin
+            S_est = _detectar_smux(R, H_full, esc, receptor, carga_mmse, combos)  # Separa los N_T flujos
+            datos_rx = np.empty(n_sym_uso, dtype=complex)
+            for a in range(n_tx):
+                datos_rx[a::n_tx] = S_est[a]                                       # Remultiplexa los flujos
+            if capturar_constelaciones:
+                simbolos_rx_antes.append(R[0])                                     # Recibido crudo (mezclado)
+                cond_acum.append(float(np.mean(np.linalg.cond(np.transpose(H_full, (2, 0, 1))))))
+
+        if capturar_constelaciones:
+            simbolos_rx_datos.append(datos_rx)
+        bits_rx_total.append(mod["demapear"](datos_rx))
+
+    bits_rx = np.concatenate(bits_rx_total) if bits_rx_total else np.array([], dtype=np.uint8)
+    bits_rx = bits_rx[:len(bits_tx_pad)]
+    ber = calcular_ber(bits_tx_pad, bits_rx)
+
+    salida = {
+        "bits_rx": bits_rx[:len(bits_tx)],
+        "ber": ber,
+        "n_simbolos_ofdm": n_ofdm,
+    }
+    if capturar_constelaciones:
+        salida["constelacion_tx"] = constelacion_tx
+        salida["constelacion_rx"] = (np.concatenate(simbolos_rx_datos)
+                                     if simbolos_rx_datos else np.array([], dtype=complex))
+        if simbolos_rx_antes:
+            salida["constelacion_rx_antes"] = np.concatenate(simbolos_rx_antes)
+        if cond_acum:
+            salida["cond_promedio"] = float(np.mean(cond_acum))
+    return salida
+
+
+# =====================================================================================
+# === [BLOQUE 6d] CODIFICACIÓN DE CANAL — Práctica 7 (CRC + convolucional + turbo)   ===
+# =====================================================================================
+# Implementa el codificador/decodificador de canal del estándar LTE (3GPP TS 36.212):
+#   · CRC-24A (§5.1.1): DETECTA errores (no corrige).
+#   · Código convolucional tail-biting R=1/3 (§5.1.3.1): G0=133,G1=171,G2=165 (octal),
+#     6 memorias; se decodifica con Viterbi suave de envoltura (WAVA).
+#   · Turbo R=1/3 (§5.1.3.2): dos RSC de 8 estados (g0=1+D²+D³, g1=1+D+D³) con
+#     entrelazador QPP interno; se decodifica con BCJR max-log iterativo.
+# La GANANCIA DE CODIFICACIÓN se logra con DECISIÓN SUAVE: tras la ecualización ZF se
+# calcula un LLR por bit ponderado por la calidad |H[k]|² de su subportadora. Los
+# decodificadores trabajan POR LOTES (B bloques a la vez) para que el sitio sea ágil.
+# La versión didáctica y comentada paso a paso está en codificacion.py.
+
+_CRC24A_POS = [24, 23, 18, 17, 14, 11, 10, 7, 6, 5, 4, 3, 1, 0]     # g(D) del CRC-24A
+_G_CONV = (0o133, 0o171, 0o165)                                     # generadores convolucionales
+# Entrelazador QPP (Tabla 5.1.3-3): π(i)=(f1·i+f2·i²) mod K.
+_QPP_TABLA = {40: (3, 10), 512: (31, 64), 1024: (31, 84), 2048: (31, 64), 6144: (263, 480)}
+K_TURBO = 512                                                       # tamaño de bloque turbo
+PAYLOAD_BLOQUE = K_TURBO - 24                                       # bits de info por bloque (488)
+
+
+# ---- CRC-24A por lotes -----------------------------------------------------------------
+def _crc24a_poly():
+    p = 0
+    for b in _CRC24A_POS:
+        p |= (1 << b)
+    return p & 0xFFFFFF                                             # taps por debajo de D²⁴
+
+
+def _crc24a_resto_lote(M):
+    """Resto del CRC-24A de cada fila de M (B×L) -> vector de B enteros de 24 bits."""
+    B, L = M.shape
+    poly = _crc24a_poly()
+    reg = np.zeros(B, dtype=np.int64)
+    cols = np.concatenate([M.astype(np.int64), np.zeros((B, 24), dtype=np.int64)], axis=1)
+    for j in range(L + 24):
+        msb = (reg >> 23) & 1
+        reg = ((reg << 1) | cols[:, j]) & 0xFFFFFF
+        reg = np.where(msb.astype(bool), reg ^ poly, reg)
+    return reg
+
+
+def _crc24a_anexar_lote(M):
+    resto = _crc24a_resto_lote(M)
+    crc = ((resto[:, None] >> np.arange(23, -1, -1)[None, :]) & 1).astype(np.uint8)
+    return np.concatenate([M.astype(np.uint8), crc], axis=1)
+
+
+def _crc24a_ok_lote(bloques):
+    payload, crc_rx = bloques[:, :-24], bloques[:, -24:]
+    resto = _crc24a_resto_lote(payload)
+    calc = ((resto[:, None] >> np.arange(23, -1, -1)[None, :]) & 1).astype(np.uint8)
+    return np.all(calc == crc_rx, axis=1)
+
+
+# ---- Trellis y predecesores (se calculan una sola vez) ---------------------------------
+def _preds_cc(nxt, n):
+    ps = np.zeros((n, 2), np.int64); pu = np.zeros((n, 2), np.int64); cnt = np.zeros(n, np.int64)
+    for s in range(n):
+        for u in range(2):
+            ns = nxt[s, u]; ps[ns, cnt[ns]] = s; pu[ns, cnt[ns]] = u; cnt[ns] += 1
+    return ps, pu
+
+
+def _conv_trellis_cc():
+    taps = np.array([[(g >> (6 - j)) & 1 for j in range(7)] for g in _G_CONV], dtype=np.int64)
+    nxt = np.zeros((64, 2), np.int64); out = np.zeros((64, 2, 3), np.int64)
+    for s in range(64):
+        Ds = [(s >> i) & 1 for i in range(6)]
+        for u in range(2):
+            for gi in range(3):
+                o = taps[gi, 0] & u
+                for i in range(6):
+                    o ^= taps[gi, i + 1] & Ds[i]
+                out[s, u, gi] = o & 1
+            nxt[s, u] = ((s << 1) | u) & 0x3F
+    return nxt, out
+
+
+def _rsc_trellis_cc():
+    nxt = np.zeros((8, 2), np.int64); par = np.zeros((8, 2), np.int64)
+    for s in range(8):
+        m1, m2, m3 = s & 1, (s >> 1) & 1, (s >> 2) & 1
+        for u in range(2):
+            a = u ^ m2 ^ m3                                         # realimentación 1+D²+D³
+            par[s, u] = a ^ m1 ^ m3                                 # paridad 1+D+D³
+            nxt[s, u] = a | (m1 << 1) | (m2 << 2)
+    return nxt, par
+
+
+_NXT_CC, _OUT_CC = _conv_trellis_cc()
+_SIGN_CC = (1 - 2 * _OUT_CC).astype(float)                          # (64,2,3) salida en ±1
+_PS_CC, _PU_CC = _preds_cc(_NXT_CC, 64)
+_NXT_RC, _PAR_RC = _rsc_trellis_cc()
+_SP_RC = (1 - 2 * _PAR_RC).astype(float)                           # (8,2) paridad en ±1
+_PS_RC, _PU_RC = _preds_cc(_NXT_RC, 8)
+_SU_RC = np.array([1.0, -1.0])
+_NEG = -1e9
+
+
+def qpp_interleaver(K):
+    f1, f2 = _QPP_TABLA[K]
+    i = np.arange(K)
+    return (f1 * i + f2 * i * i) % K
+
+
+# ---- Codificadores por lotes -----------------------------------------------------------
+def codificar_convolucional_lote(M):
+    """M (B×K) -> bits de código (B×3K), tail-biting (estado inicial = últimos 6 bits)."""
+    B, K = M.shape
+    estado = np.zeros(B, np.int64)
+    for i in range(6):
+        estado |= (M[:, K - 1 - i].astype(np.int64) << i)
+    out = np.empty((B, K, 3), np.uint8)
+    for k in range(K):
+        u = M[:, k].astype(np.int64)
+        out[:, k, :] = _OUT_CC[estado, u]
+        estado = _NXT_CC[estado, u]
+    return out.reshape(B, 3 * K)
+
+
+def _rsc_encode_lote(M):
+    B, K = M.shape
+    s = np.zeros(B, np.int64)
+    paridad = np.empty((B, K), np.uint8)
+    for k in range(K):
+        u = M[:, k].astype(np.int64)
+        paridad[:, k] = _PAR_RC[s, u]
+        s = _NXT_RC[s, u]
+    cs = np.empty((B, 3), np.uint8); cp = np.empty((B, 3), np.uint8)
+    for j in range(3):
+        u = ((s >> 1) & 1) ^ ((s >> 2) & 1)                        # entrada que termina el trellis
+        cs[:, j] = u; cp[:, j] = _PAR_RC[s, u]; s = _NXT_RC[s, u]
+    return paridad, cs, cp
+
+
+def codificar_turbo_lote(M):
+    """M (B×K) -> (vector serializado (B×(3K+12)), permutación QPP). Tasa ≈ 1/3."""
+    B, K = M.shape
+    perm = qpp_interleaver(K)
+    z1, t1s, t1p = _rsc_encode_lote(M)
+    z2, t2s, t2p = _rsc_encode_lote(M[:, perm])
+    vec = np.concatenate([M, z1, z2, t1s, t1p, t2s, t2p], axis=1)
+    return vec, perm
+
+
+# ---- Demapeo suave -> LLR (ponderado por |H|²) -----------------------------------------
+def llr_qpsk(s_eq, g):
+    s = s_eq * np.sqrt(2)
+    L = np.empty(2 * len(s_eq))
+    L[0::2] = g * np.real(s)
+    L[1::2] = g * np.imag(s)
+    return L
+
+
+def _llr_eje_4pam(x, g):
+    niveles = np.array([-3, -1, 1, 3])
+    b0 = np.array([0, 0, 1, 1]); b1 = np.array([0, 1, 1, 0])
+    d2 = (x[:, None] - niveles[None, :]) ** 2
+    L0 = d2[:, b0 == 1].min(axis=1) - d2[:, b0 == 0].min(axis=1)
+    L1 = d2[:, b1 == 1].min(axis=1) - d2[:, b1 == 0].min(axis=1)
+    return g * L0, g * L1
+
+
+def llr_16qam(s_eq, g):
+    s = s_eq * np.sqrt(10)
+    L0i, L1i = _llr_eje_4pam(np.real(s), g)
+    L0q, L1q = _llr_eje_4pam(np.imag(s), g)
+    L = np.empty(4 * len(s_eq))
+    L[0::4], L[1::4] = L0i, L1i
+    L[2::4], L[3::4] = L0q, L1q
+    return L
+
+
+# ---- Decodificadores por lotes ---------------------------------------------------------
+def viterbi_lote(LLR, vueltas=4):
+    """LLR (B×3K) -> bits (B×K). Viterbi suave tail-biting (envoltura de varias vueltas)."""
+    B = LLR.shape[0]; K = LLR.shape[1] // 3
+    LLR = LLR.reshape(B, K, 3)
+    LLRv = np.concatenate([LLR] * vueltas, axis=1); T = vueltas * K
+    metrica = np.zeros((B, 64))
+    psd = np.empty((T, B, 64), np.int16); psu = np.empty((T, B, 64), np.int8)
+    p0s, p1s = _PS_CC[:, 0], _PS_CC[:, 1]; p0u, p1u = _PU_CC[:, 0], _PU_CC[:, 1]
+    for t in range(T):
+        bm = np.tensordot(LLRv[:, t, :], _SIGN_CC, axes=([1], [2]))     # (B,64,2)
+        c0 = metrica[:, p0s] + bm[:, p0s, p0u]
+        c1 = metrica[:, p1s] + bm[:, p1s, p1u]
+        ch = c1 > c0
+        metrica = np.where(ch, c1, c0)
+        psd[t] = np.where(ch, p1s[None, :], p0s[None, :])
+        psu[t] = np.where(ch, p1u[None, :], p0u[None, :])
+    s = np.argmax(metrica, axis=1); bits = np.empty((T, B), np.uint8); ar = np.arange(B)
+    for t in range(T - 1, -1, -1):
+        bits[t] = psu[t, ar, s]; s = psd[t, ar, s]
+    return bits[(vueltas - 1) * K:].T
+
+
+def _bcjr_lote(Lsys, Lpar, La, term_sys, term_par):
+    B, K = Lsys.shape
+    Ls = np.concatenate([Lsys, term_sys], axis=1)
+    Lp = np.concatenate([Lpar, term_par], axis=1)
+    Lap = np.concatenate([La, np.zeros((B, 3))], axis=1)
+    T = K + 3
+    Aa = 0.5 * (Lap + Ls)
+    gamma = (Aa.T[:, :, None, None] * _SU_RC[None, None, None, :]
+             + 0.5 * _SP_RC[None, None, :, :] * Lp.T[:, :, None, None])    # (T,B,8,2)
+    alpha = np.full((T + 1, B, 8), _NEG); alpha[0, :, 0] = 0.0
+    for k in range(T):
+        alpha[k + 1] = (alpha[k][:, _PS_RC] + gamma[k][:, _PS_RC, _PU_RC]).max(axis=2)
+    beta = np.full((T + 1, B, 8), _NEG); beta[T, :, 0] = 0.0
+    for k in range(T - 1, -1, -1):
+        beta[k] = (beta[k + 1][:, _NXT_RC] + gamma[k]).max(axis=2)
+    full = alpha[:K][:, :, :, None] + gamma[:K] + beta[1:K + 1][:, :, _NXT_RC]    # (K,B,8,2)
+    m0 = full[:, :, :, 0].max(axis=2); m1 = full[:, :, :, 1].max(axis=2)
+    return (m0 - m1).T - La - Lsys
+
+
+def turbo_lote(Lsys, Lp1, Lp2, Lt1s, Lt1p, Lt2s, Lt2p, perm, K, n_iter=6):
+    """Decodificación turbo iterativa por lotes -> bits (B×K)."""
+    B = Lsys.shape[0]
+    invperm = np.empty(K, np.int64); invperm[perm] = np.arange(K)
+    La1 = np.zeros((B, K)); Le1 = np.zeros((B, K))
+    for _ in range(n_iter):
+        Le1 = _bcjr_lote(Lsys, Lp1, La1, Lt1s, Lt1p)
+        Le2 = _bcjr_lote(Lsys[:, perm], Lp2, Le1[:, perm], Lt2s, Lt2p)
+        La1 = Le2[:, invperm]
+    return (Lsys + Le1 + La1 < 0).astype(np.uint8)
+
+
+# ---- Cadena completa de la Práctica 7 --------------------------------------------------
+def _ofdm_canal_zf(simbolos, params, snr_db, rng):
+    """TX OFDM (todas las subportadoras, sin pilotos) -> canal Pedestrian A + AWGN -> RX +
+    ZF. Devuelve los símbolos ecualizados ŝ, la ganancia |H|² por símbolo y nº de símbolos
+    OFDM. Cada símbolo OFDM ve un canal independiente (diversidad en frecuencia)."""
+    n_sc, n_fft, n_cp, fs = params["n_sc"], params["n_fft"], params["n_cp"], params["fs"]
+    falta = (-len(simbolos)) % n_sc
+    if falta:
+        simbolos = np.concatenate([simbolos, np.zeros(falta, dtype=complex)])
+    n_ofdm = len(simbolos) // n_sc
+    s_eq, g = [], []
+    for i in range(n_ofdm):
+        rejilla = simbolos[i * n_sc:(i + 1) * n_sc]
+        _, indices_fft = mapeo_sc_a_fft(rejilla, n_fft)
+        H = generar_canal_pedestrian_a(n_fft, fs, indices_fft, rng)
+        senal_canal, _ = modulacion_ofdm(rejilla * H, n_fft, n_cp)
+        senal_rx = agregar_ruido_awgn(senal_canal, snr_db, rng)
+        rejilla_rx = demodulacion_ofdm(senal_rx, indices_fft, n_fft, n_cp, n_sc)
+        s_eq.append(rejilla_rx / H)
+        g.append(np.abs(H) ** 2)
+    return np.concatenate(s_eq), np.concatenate(g), n_ofdm
+
+
+def cadena_tx_codif_rx(bits_tx, modulacion, codigo, params, snr_db, rng,
+                       capturar_constelaciones=False):
+    """
+    Núcleo de la Práctica 7 (codificación de canal). Según `codigo`:
+      - "ninguno"       -> referencia SIN codificar (mapeo directo + decisión dura).
+      - "convolucional" -> CRC-24A + convolucional tail-biting + Viterbi suave.
+      - "turbo"         -> CRC-24A + turbo + BCJR iterativo.
+    Todos sobre la misma cadena OFDM + Pedestrian A. Devuelve bits recuperados, BER y, en
+    los códigos, el nº de bloques y cuántos fallaron el CRC (errores residuales detectados).
+    """
+    mapear = qpsk_mapear if modulacion == "QPSK" else qam16_mapear
+    demapear = qpsk_demapear if modulacion == "QPSK" else qam16_demapear
+    llr_fn = llr_qpsk if modulacion == "QPSK" else llr_16qam
+    bps = 2 if modulacion == "QPSK" else 4
+    n_sc = params["n_sc"]
+
+    # ---------- Referencia SIN codificar ----------
+    if codigo == "ninguno":
+        b = bits_tx
+        falta = (-len(b)) % bps
+        if falta:
+            b = np.concatenate([b, np.zeros(falta, dtype=np.uint8)])
+        s_eq, g, n_ofdm = _ofdm_canal_zf(mapear(b), params, snr_db, rng)
+        bits_rx = demapear(s_eq)[:len(bits_tx)]
+        salida = {"bits_rx": bits_rx, "ber": calcular_ber(bits_tx, bits_rx),
+                  "n_simbolos_ofdm": n_ofdm, "n_bloques": 0, "n_bloques_error": 0}
+        if capturar_constelaciones:
+            salida["constelacion_rx"] = s_eq[:min(len(s_eq), 4000)]
+        return salida
+
+    # ---------- TRANSMISIÓN: segmentación en bloques + CRC + codificación ----------
+    n_bloques = max(1, int(np.ceil(len(bits_tx) / PAYLOAD_BLOQUE)))
+    total = n_bloques * PAYLOAD_BLOQUE
+    payload = np.concatenate([bits_tx, np.zeros(total - len(bits_tx), dtype=np.uint8)])
+    payload = payload.reshape(n_bloques, PAYLOAD_BLOQUE)
+    bloques = _crc24a_anexar_lote(payload)                          # (B, 512) info+CRC
+    K = bloques.shape[1]
+
+    if codigo == "convolucional":
+        cod = codificar_convolucional_lote(bloques)                # (B, 3K)
+        perm = None
+    else:
+        cod, perm = codificar_turbo_lote(bloques)                  # (B, 3K+12)
+    code_len = cod.shape[1]
+    bits_cod = cod.reshape(-1)                                      # serie de bits de código
+
+    # ---------- QAM + OFDM + canal + ZF + demapeo suave ----------
+    falta = (-len(bits_cod)) % bps
+    if falta:
+        bits_cod = np.concatenate([bits_cod, np.zeros(falta, dtype=np.uint8)])
+    s_eq, g, n_ofdm = _ofdm_canal_zf(mapear(bits_cod), params, snr_db, rng)
+    llr = llr_fn(s_eq, g)[:n_bloques * code_len].reshape(n_bloques, code_len)
+
+    # ---------- Decodificación de canal por lotes ----------
+    if codigo == "convolucional":
+        bloques_rx = viterbi_lote(llr)
+    else:
+        o = 0
+        Lsys = llr[:, o:o + K]; o += K
+        Lp1 = llr[:, o:o + K]; o += K
+        Lp2 = llr[:, o:o + K]; o += K
+        Lt1s = llr[:, o:o + 3]; o += 3
+        Lt1p = llr[:, o:o + 3]; o += 3
+        Lt2s = llr[:, o:o + 3]; o += 3
+        Lt2p = llr[:, o:o + 3]; o += 3
+        bloques_rx = turbo_lote(Lsys, Lp1, Lp2, Lt1s, Lt1p, Lt2s, Lt2p, perm, K)
+
+    # ---------- Verificación de CRC + reensamblado ----------
+    crc_ok = _crc24a_ok_lote(bloques_rx)
+    info_rx = bloques_rx[:, :PAYLOAD_BLOQUE].reshape(-1)[:len(bits_tx)]
+    salida = {
+        "bits_rx": info_rx,
+        "ber": calcular_ber(bits_tx, info_rx),
+        "n_simbolos_ofdm": n_ofdm,
+        "n_bloques": int(n_bloques),
+        "n_bloques_error": int(np.sum(~crc_ok)),
+    }
+    if capturar_constelaciones:
+        salida["constelacion_rx"] = s_eq[:min(len(s_eq), 4000)]
+    return salida
+
+
+# =====================================================================================
 # === [BLOQUE 7] ENDPOINTS FLASK — exponen la lógica a la interfaz web               ===
 # =====================================================================================
 
@@ -1632,6 +2154,296 @@ def montecarlo_beamforming():
         "modulacion": modulacion,
         "series_bf": series_bf,
         "series_overlay": series_overlay,
+    })
+
+
+@app.route("/simular_smux", methods=["POST"])
+def simular_smux():
+    """
+    Práctica 6 (multiplexación espacial): ejecuta UNA transmisión de la imagen cargada con
+    MIMO en la configuración (2x2 / 4x4) y el receptor (ZF / MMSE / ML) elegidos. Para la
+    comparación ejecuta además una cadena SISO (1x1, 1 solo flujo) sobre los mismos bits.
+    Devuelve la imagen recuperada, la BER, la constelación recibida sin separar (flujos
+    mezclados) y la recuperada por el detector, además de la capacidad teórica y el throughput.
+    """
+    data = request.get_json(force=True)
+    try:
+        bw = float(data["bw_mhz"])
+        df = float(data["delta_f_khz"])
+        cp = data["tipo_cp"]
+        snr = float(data["snr_db"])
+        modulacion = data["modulacion"]
+        config = data["config"]
+        receptor = data.get("receptor", "zf")
+    except KeyError as e:
+        return jsonify({"error": f"Falta campo {e}"}), 400
+
+    CONFIGS = {"2x2": (2, 2), "4x4": (4, 4)}                          # Configuraciones MIMO válidas
+    RECEPTORES = {"zf", "mmse", "ml"}
+    if modulacion not in ESQUEMAS["OFDM"]["mods"]:                   # El transmisor de la práctica es OFDM
+        return jsonify({"error": f"{modulacion} no está disponible en OFDM"}), 400
+    if config not in CONFIGS:
+        return jsonify({"error": f"Configuración '{config}' no válida (use 2x2 o 4x4)"}), 400
+    if receptor not in RECEPTORES:
+        return jsonify({"error": f"Receptor '{receptor}' no válido (use zf, mmse o ml)"}), 400
+    if receptor == "ml" and modulacion == "64-QAM":                 # M^N_T = 64^N_T: demasiados candidatos
+        return jsonify({"error": "El detector ML solo se admite con QPSK o 16-QAM (64-QAM es demasiado costoso)"}), 400
+    if receptor == "ml" and config != "2x2":                        # 16^4 candidatos en 4×4 es inviable
+        return jsonify({"error": "El detector ML solo se admite en la configuración 2x2"}), 400
+    if ESTADO["bits"] is None:                                       # Debe haber una imagen cargada
+        return jsonify({"error": "Primero suba una imagen"}), 400
+
+    n_tx, n_rx = CONFIGS[config]
+    bps = MODULACIONES[modulacion]["bits"]
+    bits_tx = ESTADO["bits"]                                         # Bits de la imagen (mismo TX)
+    params = calcular_parametros_ofdm(bw, df, cp, len(bits_tx), bps)
+
+    rng = np.random.default_rng()
+    t0 = time.perf_counter()
+    resultado = cadena_tx_smux_rx(bits_tx, modulacion, params, snr, rng,   # MIMO con el detector elegido
+                                  capturar_constelaciones=True, n_tx=n_tx, n_rx=n_rx, receptor=receptor)
+    ref = cadena_tx_smux_rx(bits_tx, modulacion, params, snr, rng,         # SISO 1x1 de referencia (1 flujo)
+                            capturar_constelaciones=False, n_tx=1, n_rx=1)
+    tiempo_computo_s = time.perf_counter() - t0
+
+    # Tiempo de aire: la multiplexación usa MENOS usos de canal (N_T flujos/uso) → más throughput
+    tiempo_aire_s = resultado["n_simbolos_ofdm"] * params["duracion_simbolo_us"] * 1e-6
+    img_rx = bits_a_imagen(resultado["bits_rx"], ESTADO["imagen_mode"], ESTADO["imagen_size"])
+    img_tx = Image.open(io.BytesIO(ESTADO["imagen_bytes"]))
+
+    def submuestrear(arr, max_n=3000):                              # Limita los puntos enviados al navegador
+        if len(arr) > max_n:
+            idx = np.random.choice(len(arr), max_n, replace=False)
+            return arr[idx]
+        return arr
+
+    c_rx = submuestrear(resultado["constelacion_rx"])
+    salida = {                                                      # Respuesta JSON al frontend
+        "ber": resultado["ber"],
+        "ber_antes": ref["ber"],
+        "modulacion": modulacion,
+        "config": config,
+        "receptor": receptor,
+        "n_tx": n_tx,
+        "n_rx": n_rx,
+        "snr_db": snr,
+        "bits_transmitidos": int(len(bits_tx)),
+        "bits_erroneos": int(round(resultado["ber"] * len(bits_tx))),
+        "n_simbolos_ofdm": int(resultado["n_simbolos_ofdm"]),
+        "n_flujos": min(n_tx, n_rx),
+        "cond_promedio": resultado.get("cond_promedio"),
+        "capacidad_mimo_bps_hz": capacidad_mimo_bps_hz(snr, n_tx, n_rx),
+        "capacidad_siso_bps_hz": capacidad_mimo_bps_hz(snr, 1, 1),
+        "imagen_original_b64": img_a_b64(img_tx),
+        "imagen_recuperada_b64": img_a_b64(img_rx),
+        "constelacion_rx": {"real": c_rx.real.tolist(), "imag": c_rx.imag.tolist()},
+        "parametros": params,
+        "tiempo_aire_s": tiempo_aire_s,
+        "tiempo_computo_s": tiempo_computo_s,
+        "throughput_bps": (len(bits_tx) / tiempo_aire_s) if tiempo_aire_s > 0 else 0.0,
+    }
+    if "constelacion_rx_antes" in resultado:                        # Recibido sin separar (flujos mezclados)
+        c_antes = submuestrear(resultado["constelacion_rx_antes"])
+        salida["constelacion_rx_antes"] = {"real": c_antes.real.tolist(), "imag": c_antes.imag.tolist()}
+    return jsonify(salida)
+
+
+@app.route("/montecarlo_smux", methods=["POST"])
+def montecarlo_smux():
+    """
+    Práctica 6: Monte Carlo de BER vs SNR para multiplexación espacial. Devuelve DOS conjuntos
+    de curvas:
+      - series_smux: receptores en 2×2 (ZF / MMSE / ML) + SISO 1×1 de referencia. Debe verse
+        ML ≤ MMSE ≤ ZF (el ML es óptimo; el ZF realza el ruido), y todos PEORES que SISO a igual
+        SNR porque reparten la potencia en 2 flujos.
+      - series_overlay: el trade-off diversidad/multiplexación al mismo nº de antenas: SMux 2×2
+        (MMSE, 2 flujos = doble tasa) vs SFBC 2×2 y MRC 1×2 (1 flujo, mejor BER). La
+        multiplexación paga BER por DUPLICAR la tasa; la diversidad mejora la BER sin subir la
+        tasa. Las tres con la MISMA calibración de ruido (al recibido). IC 95% con t de Student.
+    """
+    data = request.get_json(force=True)
+    try:
+        bw = float(data["bw_mhz"])
+        df = float(data["delta_f_khz"])
+        cp = data["tipo_cp"]
+        modulacion = data["modulacion"]
+    except KeyError as e:
+        return jsonify({"error": f"Falta campo {e}"}), 400
+
+    if modulacion not in ESQUEMAS["OFDM"]["mods"]:
+        return jsonify({"error": f"{modulacion} no está disponible en OFDM"}), 400
+
+    N_BITS_MC = 10000                                  # Bits por corrida (igual que MRC/SFBC/BF)
+    snr_valores = list(range(0, 16))                   # Barrido de SNR de 0 a 15 dB
+    n_sim = 8                                          # Corridas independientes por punto
+    rng = np.random.default_rng()
+    t_critico = float(t_student.ppf(0.975, df=n_sim - 1))   # t de Student al 95%
+
+    bps = MODULACIONES[modulacion]["bits"]
+    params = calcular_parametros_ofdm(bw, df, cp, N_BITS_MC, bps)
+    incluir_ml = (modulacion != "64-QAM")              # ML solo con QPSK/16-QAM (64-QAM es muy costoso)
+
+    def corrida(funcion):                              # Genera bits nuevos y devuelve la BER de una corrida
+        return lambda snr: funcion(rng.integers(0, 2, N_BITS_MC, dtype=np.uint8), snr)
+
+    # --- Receptores 2×2 (ZF / MMSE / ML) + SISO 1×1 de referencia ---
+    series_smux = []
+    casos = [("1x1", 1, 1, "zf"), ("zf", 2, 2, "zf"), ("mmse", 2, 2, "mmse")]
+    if incluir_ml:
+        casos.append(("ml", 2, 2, "ml"))
+    for nombre, n_tx, n_rx, rec in casos:
+        f = corrida(lambda bits, snr, n_tx=n_tx, n_rx=n_rx, rec=rec: cadena_tx_smux_rx(
+            bits, modulacion, params, snr, rng, n_tx=n_tx, n_rx=n_rx, receptor=rec)["ber"])
+        ber_prom, ic_inf, ic_sup = _curva_ber_mc(f, snr_valores, n_sim, t_critico)
+        series_smux.append({"receptor": nombre, "ber_promedio": ber_prom,
+                            "ic_inferior": ic_inf, "ic_superior": ic_sup})
+
+    # --- Overlay del trade-off (mismo nº de antenas): SMux 2×2 (MMSE) vs SFBC 2×2 vs MRC 1×2 ---
+    # Las tres con la MISMA calibración de ruido (al recibido, ruido_piso_fijo=False): la
+    # multiplexación duplica la TASA a costa de peor BER; la diversidad mejora la BER sin tasa extra.
+    f_smux = corrida(lambda bits, snr: cadena_tx_smux_rx(
+        bits, modulacion, params, snr, rng, n_tx=2, n_rx=2, receptor="mmse")["ber"])
+    smux_prom, smux_inf, smux_sup = _curva_ber_mc(f_smux, snr_valores, n_sim, t_critico)
+    f_sfbc = corrida(lambda bits, snr: cadena_tx_sfbc_rx(
+        bits, modulacion, params, snr, rng, n_tx=2, n_rx=2)["ber"])
+    sfbc_prom, sfbc_inf, sfbc_sup = _curva_ber_mc(f_sfbc, snr_valores, n_sim, t_critico)
+    f_mrc = corrida(lambda bits, snr: cadena_tx_rx(
+        bits, modulacion, params, snr, rng, usar_dft_spread=False, n_rx=2)["ber"])
+    mrc_prom, mrc_inf, mrc_sup = _curva_ber_mc(f_mrc, snr_valores, n_sim, t_critico)
+    series_overlay = [
+        {"tecnica": "SMux 2x2", "ber_promedio": smux_prom, "ic_inferior": smux_inf, "ic_superior": smux_sup},
+        {"tecnica": "SFBC 2x2", "ber_promedio": sfbc_prom, "ic_inferior": sfbc_inf, "ic_superior": sfbc_sup},
+        {"tecnica": "MRC 1x2", "ber_promedio": mrc_prom, "ic_inferior": mrc_inf, "ic_superior": mrc_sup},
+    ]
+
+    return jsonify({                                   # Respuesta con los dos conjuntos de curvas
+        "snr_valores": snr_valores,
+        "n_simulaciones": n_sim,
+        "t_critico": t_critico,
+        "n_bits_mc": N_BITS_MC,
+        "modulacion": modulacion,
+        "incluir_ml": incluir_ml,
+        "series_smux": series_smux,
+        "series_overlay": series_overlay,
+    })
+
+
+_CODIGOS_CODIF = {"ninguno", "convolucional", "turbo"}
+_MODS_CODIF = ["QPSK", "16-QAM"]                       # el demapeo suave (LLR) cubre estas dos
+
+
+@app.route("/simular_codif", methods=["POST"])
+def simular_codif():
+    """
+    Práctica 7 (codificación de canal): transmite la imagen cargada DOS veces sobre la misma
+    cadena OFDM + Pedestrian A: con el código elegido (convolucional o turbo) y SIN codificar.
+    Devuelve ambas imágenes recuperadas, sus BER y, del código, cuántos bloques detectó el
+    CRC con error. Así se ve la GANANCIA DE CODIFICACIÓN (la imagen codificada llega limpia).
+    """
+    data = request.get_json(force=True)
+    try:
+        bw = float(data["bw_mhz"])
+        df = float(data["delta_f_khz"])
+        cp = data["tipo_cp"]
+        snr = float(data["snr_db"])
+        modulacion = data["modulacion"]
+        codigo = data["codigo"]
+    except KeyError as e:
+        return jsonify({"error": f"Falta campo {e}"}), 400
+
+    if modulacion not in _MODS_CODIF:
+        return jsonify({"error": f"{modulacion} no disponible (use QPSK o 16-QAM)"}), 400
+    if codigo not in _CODIGOS_CODIF or codigo == "ninguno":
+        return jsonify({"error": "Elija un código: 'convolucional' o 'turbo'"}), 400
+    if ESTADO["bits"] is None:
+        return jsonify({"error": "Primero suba una imagen"}), 400
+
+    bps = MODULACIONES[modulacion]["bits"]
+    bits_tx = ESTADO["bits"]
+    params = calcular_parametros_ofdm(bw, df, cp, len(bits_tx), bps)
+
+    rng = np.random.default_rng()
+    t0 = time.perf_counter()
+    res = cadena_tx_codif_rx(bits_tx, modulacion, codigo, params, snr, rng,    # con código
+                             capturar_constelaciones=True)
+    ref = cadena_tx_codif_rx(bits_tx, modulacion, "ninguno", params, snr, rng)  # sin codificar
+    tiempo_computo_s = time.perf_counter() - t0
+
+    tiempo_aire_s = res["n_simbolos_ofdm"] * params["duracion_simbolo_us"] * 1e-6
+    img_cod = bits_a_imagen(res["bits_rx"], ESTADO["imagen_mode"], ESTADO["imagen_size"])
+    img_sin = bits_a_imagen(ref["bits_rx"], ESTADO["imagen_mode"], ESTADO["imagen_size"])
+    img_tx = Image.open(io.BytesIO(ESTADO["imagen_bytes"]))
+
+    c_rx = res.get("constelacion_rx", np.array([], dtype=complex))
+    if len(c_rx) > 3000:
+        c_rx = c_rx[np.random.choice(len(c_rx), 3000, replace=False)]
+
+    return jsonify({
+        "ber": res["ber"],
+        "ber_sin": ref["ber"],
+        "modulacion": modulacion,
+        "codigo": codigo,
+        "snr_db": snr,
+        "bits_transmitidos": int(len(bits_tx)),
+        "bits_erroneos": int(round(res["ber"] * len(bits_tx))),
+        "bits_erroneos_sin": int(round(ref["ber"] * len(bits_tx))),
+        "n_bloques": res["n_bloques"],
+        "n_bloques_error": res["n_bloques_error"],
+        "tasa_codigo": "1/3",
+        "n_simbolos_ofdm": int(res["n_simbolos_ofdm"]),
+        "n_simbolos_ofdm_sin": int(ref["n_simbolos_ofdm"]),
+        "imagen_original_b64": img_a_b64(img_tx),
+        "imagen_recuperada_b64": img_a_b64(img_cod),
+        "imagen_recuperada_sin_b64": img_a_b64(img_sin),
+        "constelacion_rx": {"real": c_rx.real.tolist(), "imag": c_rx.imag.tolist()},
+        "parametros": params,
+        "tiempo_aire_s": tiempo_aire_s,
+        "tiempo_computo_s": tiempo_computo_s,
+    })
+
+
+@app.route("/montecarlo_codif", methods=["POST"])
+def montecarlo_codif():
+    """
+    Práctica 7: Monte Carlo de BER vs SNR con TRES curvas sobre la misma cadena OFDM +
+    Pedestrian A: sin codificar / convolucional / turbo. Debe verse turbo ≤ convolucional ≤
+    sin codificar (ganancia de codificación), con el "acantilado" del turbo. IC 95% (t-Student).
+    """
+    data = request.get_json(force=True)
+    try:
+        bw = float(data["bw_mhz"])
+        df = float(data["delta_f_khz"])
+        cp = data["tipo_cp"]
+        modulacion = data["modulacion"]
+    except KeyError as e:
+        return jsonify({"error": f"Falta campo {e}"}), 400
+    if modulacion not in _MODS_CODIF:
+        return jsonify({"error": f"{modulacion} no disponible (use QPSK o 16-QAM)"}), 400
+
+    N_BITS_MC = 3 * PAYLOAD_BLOQUE                      # 3 bloques por corrida
+    snr_valores = list(range(0, 16))                   # Barrido de SNR de 0 a 15 dB
+    n_sim = 6                                           # Corridas independientes por punto
+    rng = np.random.default_rng()
+    t_critico = float(t_student.ppf(0.975, df=n_sim - 1))
+    bps = MODULACIONES[modulacion]["bits"]
+    params = calcular_parametros_ofdm(bw, df, cp, N_BITS_MC, bps)
+
+    series_ber = []
+    for codigo in ["ninguno", "convolucional", "turbo"]:
+        f = lambda snr, codigo=codigo: cadena_tx_codif_rx(
+            rng.integers(0, 2, N_BITS_MC, dtype=np.uint8), modulacion, codigo,
+            params, snr, rng)["ber"]
+        ber_prom, ic_inf, ic_sup = _curva_ber_mc(f, snr_valores, n_sim, t_critico)
+        series_ber.append({"codigo": codigo, "ber_promedio": ber_prom,
+                           "ic_inferior": ic_inf, "ic_superior": ic_sup})
+
+    return jsonify({
+        "snr_valores": snr_valores,
+        "n_simulaciones": n_sim,
+        "t_critico": t_critico,
+        "n_bits_mc": N_BITS_MC,
+        "modulacion": modulacion,
+        "series_ber": series_ber,
     })
 
 
