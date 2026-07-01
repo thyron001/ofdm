@@ -1545,22 +1545,31 @@ function crearPanelBeamforming() {
 }
 
 // =====================================================================
-// === PANEL MIMO — DIVERSIDAD COMBINADA TX+RX (Práctica 6)          ===
+// === PANEL MIMO — MULTIPLEXACIÓN ESPACIAL + SIC (Práctica 6)       ===
 // =====================================================================
-// Panel propio (espejo de crearPanelBeamforming). El TX envía la MISMA información con SFBC
-// (Alamouti, 2 TX) y el RX combina Alamouti + MRC sobre N_R antenas. Color = configuración
-// (arriba, 2×1/2×2/2×4) o técnica (overlay del origen de la diversidad).
-const COLORES_MIMO = { '2x1': '#1E54E0', '2x2': '#18A34B', '2x4': '#D82A2A' };
-const ETIQUETAS_MIMO = { '2x1': '2×1 (orden 2)', '2x2': '2×2 (orden 4)', '2x4': '2×4 (orden 8)' };
-const COLORES_OVERLAY_MIMO = { 'SISO 1x1': '#888888', 'SFBC 2x1': '#E58A1A', 'MRC 1x2': '#1E54E0', 'SFBC+MRC 2x2': '#18A34B' };
-const ETIQUETAS_OVERLAY_MIMO = {
-  'SISO 1x1': 'SISO 1×1 (orden 1)', 'SFBC 2x1': 'SFBC 2×1 (solo TX, o2)',
-  'MRC 1x2': 'MRC 1×2 (solo RX, o2)', 'SFBC+MRC 2x2': 'SFBC+MRC 2×2 (combinado, o4)',
+// Panel propio (espejo de crearPanelBeamforming). El TX envía N_L señales INDEPENDIENTES
+// simultáneas (multi-codeword: modulación propia por señal, PARC) y el RX aplica SIC
+// (detectar → decodificar → re-codificar → restar). Color = configuración; la curva
+// "4x4-lineal" (sin SIC) va discontinua para evidenciar el procesamiento no lineal.
+const COLORES_MIMO = { '1x4': '#888888', '2x4': '#18A34B', '3x4': '#1E54E0', '4x4': '#D82A2A', '4x4-lineal': '#D82A2A' };
+const ETIQUETAS_MIMO = {
+  '1x4': '1×4 — 1 señal (sin interferencia)', '2x4': '2×4 SIC — 2 señales',
+  '3x4': '3×4 SIC — 3 señales', '4x4': '4×4 SIC — 4 señales',
+  '4x4-lineal': '4×4 lineal (sin SIC)',
 };
+const ORDEN_MODS_PARC = ['QPSK', '16-QAM', '64-QAM'];
+
+// Perfil PARC (misma escalera que el backend): señal 0 se decodifica primero → más robusta.
+function perfilPARC(modulacion, nSenales) {
+  const idx = ORDEN_MODS_PARC.indexOf(modulacion);
+  const perfil = [];
+  for (let i = 0; i < nSenales; i++) perfil.push(ORDEN_MODS_PARC[Math.max(0, idx - (nSenales - 1 - i))]);
+  return perfil;
+}
 
 function crearPanelMIMO() {
   const $ = (id) => document.getElementById(id);
-  const estado = { imagenSubida: false, nBits: 0, graficoMC: null, graficoOverlay: null };
+  const estado = { imagenSubida: false, nBits: 0, graficoMC: null, graficoTiempo: null };
 
   // ---------- Parámetros ----------
   function validarCombinacion() {
@@ -1578,11 +1587,18 @@ function crearPanelMIMO() {
       cp.innerHTML = '<option value="extendido">Extendido (33.33 µs)</option>';
     }
   }
+  function mostrarPerfilPARC() {
+    const n = parseInt(($('mimo-config').value || '2x2').split('x')[0]);
+    const perfil = perfilPARC($('mimo-modulacion').value, n);
+    $('mimo-perfil-parc').textContent =
+      perfil.map((m, i) => `S${i + 1}: ${m}`).join('  ·  ');
+  }
   async function actualizarParametros() {
     if (!validarCombinacion()) {
       $('mimo-kv-params').innerHTML = '<div class="kv"><div class="kv-label">Combinación inválida</div></div>';
       return;
     }
+    mostrarPerfilPARC();
     const payload = {
       bw_mhz: parseFloat($('mimo-bw').value),
       delta_f_khz: parseFloat($('mimo-df').value),
@@ -1605,24 +1621,31 @@ function crearPanelMIMO() {
   }
   function renderKV(p, extras = {}) {
     const cfg = $('mimo-config').value || '2x2';
-    const [nTx, nRx] = cfg.split('x').map(Number);
+    const n = parseInt(cfg.split('x')[0]);
+    const perfil = perfilPARC($('mimo-modulacion').value, n);
     const items = [
       ['Subportadoras útiles (N_SC)', p.n_sc],
       ['Tamaño de la FFT (N_FFT)', p.n_fft],
       ['Frecuencia de muestreo (fs)', (p.fs / 1e6).toFixed(3) + ' MHz'],
       ['Muestras de prefijo cíclico (N_CP)', p.n_cp],
       ['Antenas (N_T × N_R)', cfg.replace('x', ' × ')],
-      ['Orden de diversidad (N_T·N_R)', nTx * nRx],
-      ['Pares Alamouti por símbolo (N_SC/2)', Math.floor((p.n_sc || 0) / 2)],
+      ['Señales simultáneas (N_L)', n],
+      ['Perfil PARC (S1 → S' + n + ')', perfil.join(' / ')],
       ['Bits totales de la imagen', (estado.nBits || 0).toLocaleString()],
-      ['Modulación aplicada', $('mimo-modulacion').value],
     ];
-    if (extras.tiempo_aire_s != null) items.push(['Tiempo de transmisión (aire)', formatearTiempo(extras.tiempo_aire_s)]);
+    if (extras.tiempo_aire_s != null) {
+      items.push(['Tiempo de envío MIMO (aire)', formatearTiempo(extras.tiempo_aire_s)]);
+      if (extras.tiempo_aire_siso_s != null) {
+        items.push(['Tiempo de envío SISO equivalente', formatearTiempo(extras.tiempo_aire_siso_s)]);
+        items.push(['Aceleración por multiplexación', '×' + (extras.tiempo_aire_siso_s / extras.tiempo_aire_s).toFixed(2)]);
+      }
+    }
     $('mimo-kv-params').innerHTML = items.map(([l, v]) =>
       `<div class="kv"><div class="kv-label">${l}</div><div class="kv-valor">${v}</div></div>`
     ).join('') +
       '<div class="kv" style="grid-column:1/-1"><div class="kv-label" style="font-size:12px">' +
-      'Diversidad combinada: SFBC (Alamouti, 2 TX) + MRC (N_R RX), misma información redundante y sin pilotos. Orden = N_T·N_R.' +
+      'Multiplexación espacial multi-codeword: N_L señales independientes simultáneas (reparto de potencia 1/√N_T, sin pilotos), ' +
+      'PARC: la 1ª señal decodificada (más interferida) usa la modulación más robusta. Receptor SIC no lineal.' +
       '</div></div>';
   }
 
@@ -1684,12 +1707,12 @@ function crearPanelMIMO() {
     }
   }
 
-  // ---------- Simulación única (imagen + constelaciones sin diversidad vs SFBC+MRC) ----------
+  // ---------- Simulación única (imagen + BER por señal + lineal vs SIC) ----------
   async function ejecutarSimulacion() {
     if (!estado.imagenSubida) { alert('Sube una imagen primero'); return; }
     $('mimo-btn-simular').disabled = true;
     $('mimo-btn-simular').innerHTML = '<span class="spinner"></span> Simulando...';
-    $('mimo-estado-sim').textContent = 'Ejecutando TX SFBC (2 antenas) → canales → combinador Alamouti + MRC...';
+    $('mimo-estado-sim').textContent = 'Ejecutando TX multi-codeword (N_L señales) → canal MIMO → SIC...';
     $('mimo-estado-sim').className = 'estado';
     const payload = {
       bw_mhz: parseFloat($('mimo-bw').value),
@@ -1724,24 +1747,31 @@ function crearPanelMIMO() {
     $('mimo-ber-valor').textContent = (j.ber * 100).toFixed(3) + ' %';
     const configTxt = (j.config || '').replace('x', '×');
     $('mimo-ber-detalle').textContent =
-      `${j.bits_erroneos.toLocaleString()} / ${j.bits_transmitidos.toLocaleString()} bits — ${j.n_simbolos_ofdm} símbolos OFDM — SFBC+MRC ${configTxt} (orden ${j.orden_diversidad}) — SNR ${j.snr_db} dB`;
-    $('mimo-titulo-despues').textContent = `SFBC+MRC ${configTxt}`;
+      `${j.bits_erroneos.toLocaleString()} / ${j.bits_transmitidos.toLocaleString()} bits — ${j.n_simbolos_ofdm} usos de canal — MIMO ${configTxt} · ${j.n_senales} señales · SIC — SNR ${j.snr_db} dB`;
+    // Tabla de BER por señal: la 1ª se decodifica con más interferentes (por eso es más robusta)
+    $('mimo-tabla-flujos').innerHTML = (j.ber_por_flujo || []).map((f, i) =>
+      `<tr><td>S${f.flujo}</td><td>${f.modulacion}</td><td>${j.n_senales - 1 - i}</td><td>${(f.ber * 100).toFixed(3)} %</td></tr>`
+    ).join('');
+    $('mimo-resumen-flujos').textContent =
+      `La señal S1 se decodifica primero (${j.n_senales - 1} interferentes) → modulación más robusta; ` +
+      `S${j.n_senales} se decodifica al final, ya sin interferencia gracias al SIC → puede usar ${j.perfil[j.perfil.length - 1]}.`;
     if (j.constelacion_rx_antes) {
-      dibujarNube('mimo-constelacion-antes-canvas', j.constelacion_rx_antes, j.modulacion, 'rgba(216,42,42,0.45)');
+      dibujarNube('mimo-constelacion-antes-canvas', j.constelacion_rx_antes, j.modulacion, 'rgba(216,42,42,0.40)');
     }
     dibujarNube('mimo-constelacion-despues-canvas', j.constelacion_rx, j.modulacion, 'rgba(24,163,75,0.5)');
-    const beraTxt = (typeof j.ber_antes === 'number') ? ` (BER sin diversidad ≈ ${(j.ber_antes * 100).toFixed(3)} %)` : '';
+    const beraTxt = (typeof j.ber_antes === 'number') ? ` (BER lineal ≈ ${(j.ber_antes * 100).toFixed(3)} %)` : '';
     $('mimo-resumen-constelacion').textContent =
-      `Izquierda: 1 sola antena TX/RX con ZF (dispersa por el desvanecimiento)${beraTxt}. ` +
-      `Derecha: SFBC+MRC ${configTxt} de orden ${j.orden_diversidad} (nube más compacta = menor error, gracias a combinar diversidad de TX y de RX).`;
-    renderKV(j.parametros, { tiempo_aire_s: j.tiempo_aire_s });
+      `Izquierda: receptor LINEAL — las ${j.n_senales} señales quedan con interferencia residual (nube difusa)${beraTxt}. ` +
+      `Derecha: SIC — cada señal se decodifica, se re-codifica y se resta; las siguientes ven menos interferencia (nube más limpia). ` +
+      `Ambas superponen las constelaciones del perfil ${j.perfil.join('+')}.`;
+    renderKV(j.parametros, { tiempo_aire_s: j.tiempo_aire_s, tiempo_aire_siso_s: j.tiempo_aire_siso_s });
   }
 
-  // ---------- Monte Carlo (órdenes combinadas + overlay del origen de la diversidad) ----------
+  // ---------- Monte Carlo (BER interferencia + tiempos de envío) ----------
   async function ejecutarMontecarlo() {
     $('mimo-btn-mc').disabled = true;
     $('mimo-btn-mc').innerHTML = '<span class="spinner"></span> Ejecutando Monte Carlo...';
-    $('mimo-estado-sim').textContent = 'Monte Carlo: órdenes 2×1/2×2/2×4 + overlay SISO/SFBC/MRC/combinado × 16 SNR × 8 corridas (puede tardar)...';
+    $('mimo-estado-sim').textContent = 'Monte Carlo: 1/2/3/4 señales sobre 4 antenas RX (SIC) + 4×4 lineal × 16 SNR × 8 corridas (puede tardar)...';
     $('mimo-estado-sim').className = 'estado';
     const payload = {
       bw_mhz: parseFloat($('mimo-bw').value),
@@ -1764,24 +1794,23 @@ function crearPanelMIMO() {
       $('mimo-estado-sim').className = 'estado err';
     } finally {
       $('mimo-btn-mc').disabled = false;
-      $('mimo-btn-mc').textContent = 'Monte Carlo (Diversidad combinada)';
+      $('mimo-btn-mc').textContent = 'Monte Carlo (Multiplexación)';
     }
   }
-  function construirGrafico(canvasId, series, claveEtiqueta, mapaColor, mapaEtiqueta, titulo) {
+  function construirGraficoBER(canvasId, series, titulo) {
     const PISO = 1e-5;
-    const datasets = series.map((s) => {
-      const clave = s[claveEtiqueta];
-      return {
-        label: mapaEtiqueta[clave] || clave,
-        data: s.ber_promedio.map((v, i) => ({ x: i, y: Math.max(v, PISO) })),
-        errorBars: s.ber_promedio.map((_, i) => ({
-          lo: Math.max(s.ic_inferior[i], PISO), hi: Math.max(s.ic_superior[i], PISO),
-        })),
-        borderColor: mapaColor[clave] || '#1E54E0',
-        backgroundColor: mapaColor[clave] || '#1E54E0',
-        pointRadius: 4, tension: 0.15, fill: false,
-      };
-    });
+    const datasets = series.map((s) => ({
+      label: ETIQUETAS_MIMO[s.config] || s.config,
+      data: s.ber_promedio.map((v, i) => ({ x: i, y: Math.max(v, PISO) })),
+      errorBars: s.ber_promedio.map((_, i) => ({
+        lo: Math.max(s.ic_inferior[i], PISO), hi: Math.max(s.ic_superior[i], PISO),
+      })),
+      borderColor: COLORES_MIMO[s.config] || '#1E54E0',
+      backgroundColor: COLORES_MIMO[s.config] || '#1E54E0',
+      borderDash: s.config.endsWith('lineal') ? [6, 4] : [],       // sin SIC → discontinua
+      pointStyle: s.config.endsWith('lineal') ? 'triangle' : 'circle',
+      pointRadius: 4, tension: 0.15, fill: false,
+    }));
     return new Chart($(canvasId).getContext('2d'), {
       type: 'line',
       data: { datasets },
@@ -1809,29 +1838,73 @@ function crearPanelMIMO() {
       plugins: [PLUGIN_ERROR_BARS],
     });
   }
+  function construirGraficoTiempo(canvasId, series, titulo) {
+    return new Chart($(canvasId).getContext('2d'), {
+      type: 'bar',
+      data: {
+        labels: series.map((s) => s.config.replace('x', '×')),
+        datasets: [{
+          label: 'Tiempo de envío (aire)',
+          data: series.map((s) => s.tiempo_aire_ms),
+          backgroundColor: series.map((s) => COLORES_MIMO[s.config] || '#1E54E0'),
+        }],
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false, animation: false,
+        plugins: {
+          legend: { display: false },
+          title: { display: !!titulo, text: titulo, font: { weight: 700, size: 13 } },
+          tooltip: {
+            callbacks: {
+              label: (ctx) => {
+                const s = series[ctx.dataIndex];
+                return `${s.tiempo_aire_ms.toFixed(2)} ms — ${s.n_simbolos_ofdm.toLocaleString()} símbolos OFDM — ${s.n_senales} señal(es)`;
+              },
+            },
+          },
+        },
+        scales: {
+          x: { title: { display: true, text: 'Configuración (N_T × N_R)', font: { weight: 700 } } },
+          y: { title: { display: true, text: 'Tiempo de envío (ms)', font: { weight: 700 } }, beginAtZero: true },
+        },
+      },
+    });
+  }
+  function conmutarVistaMC(mostrarTiempo) {
+    $('mimo-mc-vista-ber').style.display = mostrarTiempo ? 'none' : 'block';
+    $('mimo-mc-vista-tiempo').style.display = mostrarTiempo ? 'block' : 'none';
+    $('mimo-mtab-ber').className = 'boton' + (mostrarTiempo ? '' : ' boton-primario');
+    $('mimo-mtab-tiempo').className = 'boton' + (mostrarTiempo ? ' boton-primario' : '');
+    // Chart.js no siempre detecta el cambio de display: forzar el redimensionado
+    if (mostrarTiempo && estado.graficoTiempo) estado.graficoTiempo.resize();
+    if (!mostrarTiempo && estado.graficoMC) estado.graficoMC.resize();
+  }
   function pintarMC(j) {
     $('mimo-modal-mc').style.display = 'flex';
-    $('mimo-mc-titulo').textContent = `MIMO — Diversidad combinada (SFBC+MRC) — BER vs SNR — ${j.modulacion}`;
+    $('mimo-mc-titulo').textContent = `MIMO — Multiplexación espacial — Monte Carlo — ${j.modulacion}`;
     if (estado.graficoMC) estado.graficoMC.destroy();
-    if (estado.graficoOverlay) estado.graficoOverlay.destroy();
-    estado.graficoMC = construirGrafico('mimo-montecarlo-canvas', j.series_mimo, 'config',
-      COLORES_MIMO, ETIQUETAS_MIMO, 'Órdenes de diversidad combinada: a mayor N_R, mayor pendiente');
-    estado.graficoOverlay = construirGrafico('mimo-overlay-canvas', j.series_overlay, 'tecnica',
-      COLORES_OVERLAY_MIMO, ETIQUETAS_OVERLAY_MIMO, 'Combinar TX+RX multiplica la orden (2×2 = 4)');
+    if (estado.graficoTiempo) estado.graficoTiempo.destroy();
+    estado.graficoMC = construirGraficoBER('mimo-montecarlo-canvas', j.series_ber,
+      'Array RX fijo (4 ant.): cada señal TX adicional ⇒ más interferencia ⇒ peor BER');
+    $('mimo-titulo-tiempo').textContent =
+      `Tiempo de envío de ${j.n_bits_ref.toLocaleString()} bits vs configuración — ${j.modulacion}`;
+    estado.graficoTiempo = construirGraficoTiempo('mimo-tiempo-canvas', j.series_tiempo,
+      'Más señales simultáneas ⇒ menos símbolos OFDM ⇒ menos tiempo de envío');
+    conmutarVistaMC(false);
   }
 
   // ---------- Descargar PNG (los dos gráficos apilados) ----------
   function descargarMC() {
     if (!estado.graficoMC) return;
-    const a = $('mimo-montecarlo-canvas'), b = $('mimo-overlay-canvas');
+    const a = $('mimo-montecarlo-canvas'), b = $('mimo-tiempo-canvas');
     const tmp = document.createElement('canvas');
-    tmp.width = Math.max(a.width, b.width); tmp.height = a.height + b.height + 20;
+    tmp.width = Math.max(a.width, b.width || 0); tmp.height = a.height + (b.height || 0) + 20;
     const tctx = tmp.getContext('2d');
     tctx.fillStyle = '#FFFFFF'; tctx.fillRect(0, 0, tmp.width, tmp.height);
     tctx.drawImage(a, 0, 0);
-    tctx.drawImage(b, 0, a.height + 20);
+    if (b.width) tctx.drawImage(b, 0, a.height + 20);
     const link = document.createElement('a');
-    link.download = `mimo_diversidad_ber_snr_${Date.now()}.png`;
+    link.download = `mimo_smux_sic_${Date.now()}.png`;
     link.href = tmp.toDataURL('image/png');
     link.click();
   }
@@ -1847,6 +1920,8 @@ function crearPanelMIMO() {
     $('mimo-archivo-imagen').addEventListener('change', subirImagen);
     $('mimo-btn-simular').addEventListener('click', ejecutarSimulacion);
     $('mimo-btn-mc').addEventListener('click', ejecutarMontecarlo);
+    $('mimo-mtab-ber').addEventListener('click', () => conmutarVistaMC(false));
+    $('mimo-mtab-tiempo').addEventListener('click', () => conmutarVistaMC(true));
     ['mimo-img-tx', 'mimo-img-rx'].forEach((k) => {
       $(k).addEventListener('click', () => {
         const lb = document.getElementById('lightbox');

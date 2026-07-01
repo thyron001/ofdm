@@ -930,139 +930,169 @@ def cadena_tx_beamforming_rx(bits_tx: np.ndarray, modulacion: str, params: Dict,
 
 
 # =====================================================================================
-# === [BLOQUE 6c] MIMO — DIVERSIDAD COMBINADA TX + RX — Práctica 6 (SFBC + MRC)      ===
+# === [BLOQUE 6c] MIMO — MULTIPLEXACIÓN ESPACIAL MULTI-CODEWORD + SIC — Práctica 6   ===
 # =====================================================================================
-# Esta práctica MEZCLA las dos técnicas de diversidad ya vistas para lograr la MÁXIMA
-# diversidad de un sistema MIMO, enviando la MISMA información (redundante) por TODAS las
-# antenas (NO flujos independientes):
-#   · DIVERSIDAD EN TX  -> SFBC/Alamouti (P4): 2 antenas TX envían, por cada par (k,k+1),
-#     (s0,s1) y su versión ortogonal (-s1*, s0*), cada una escalada por 1/√2.
-#   · DIVERSIDAD EN RX  -> MRC (P3): las N_R antenas RX se combinan sumando coherentemente,
-#     ponderando por la ganancia de canal.
-# El receptor hace ambas a la vez: por cada antena RX aplica el combinador ortogonal de
-# Alamouti (recupera la diversidad TX) y SUMA las N_R antenas ponderando por Σ(|h1|²+|h2|²)
-# (eso es MRC -> recupera la diversidad RX). Orden de diversidad total = N_T·N_R = 2·N_R:
-#   2x1 -> orden 2,  2x2 -> orden 4,  2x4 -> orden 8. La curva BER cae con mayor pendiente
-# al subir la orden. La versión didáctica y comentada paso a paso está en mimo.py.
+# Multiplexación espacial (Cap. 5, pág. 181-208): con N_T antenas TX y N_R antenas RX se
+# transmiten N_L = min(N_T,N_R) SEÑALES INDEPENDIENTES a la vez, una por antena. La tasa
+# se multiplica por N_L (el tiempo de envío se divide), PERO las señales se INTERFIEREN
+# mutuamente: cada antena RX recibe la SUMA de las N_T señales → a más antenas, más
+# interferencia.
+#   · TX MULTI-CODEWORD (diapo 204): cada señal tiene su PROPIO "coding & modulation".
+#     Eso permite dar DIFERENTE ROBUSTEZ a cada señal (PARC, diapo 208): la 1ª en
+#     decodificarse (máxima interferencia) usa la modulación más robusta (QPSK); las
+#     últimas (ya sin interferencia por el SIC) usan modulaciones más agresivas.
+#   · RX NO LINEAL — SIC (diapos 206-207): demodula/decodifica la 1ª señal (MMSE),
+#     la RE-CODIFICA (decisión dura → réplica limpia) y la RESTA de todas las antenas;
+#     la 2ª señal se decodifica con SIR mejorada… y así hasta la señal N_L.
+# Cada antena TX se escala por 1/√N_T (potencia total constante). Sin pilotos (CSI genie).
+# La versión didáctica y comentada paso a paso está en mimo.py.
 
-def cadena_tx_mimo_div_rx(bits_tx: np.ndarray, modulacion: str, params: Dict,
-                          snr_db: float, rng: np.random.Generator,
-                          capturar_constelaciones: bool = False,
-                          n_tx: int = 2, n_rx: int = 2,
-                          ruido_piso_fijo: bool = False) -> Dict:
+_ORDEN_MODS_PARC = ["QPSK", "16-QAM", "64-QAM"]   # De más robusta a menos robusta
+
+
+def perfil_parc(modulacion: str, n_senales: int) -> list:
     """
-    Núcleo de la Práctica 6 (diversidad combinada TX+RX). Combina SFBC (Alamouti, 2 antenas
-    TX) con MRC (N_R antenas RX) enviando la MISMA información redundante por todas las antenas:
-
-      - n_tx == 1  -> SISO/MRC de referencia (solo diversidad RX): canal Pedestrian A y
-                      combinación MRC sobre n_rx antenas (ZF si n_rx=1). Orden = n_rx.
-      - n_tx == 2  -> SFBC + MRC: Alamouti sobre 2 antenas TX (cada una a 1/√2 de potencia) y
-                      combinación conjunta Alamouti+MRC sobre las n_rx antenas RX. La orden de
-                      diversidad es 2·n_rx (2x1 -> 2, 2x2 -> 4, 2x4 -> 8): la curva BER cae con
-                      MAYOR PENDIENTE al subir n_rx.
-
-    Como SFBC/BF, NO intercala pilotos: usa TODAS las subportadoras en pares (CSI genie), con
-    H[k] ≈ H[k+1] al ser adyacentes. El ruido se calibra al recibido (pot_ref=None) salvo que
-    se pida piso fijo, para comparar la ORDEN de diversidad a igual SNR recibida.
+    PARC (Per-Antenna Rate Control, diapo 208): asigna una modulación a cada señal EN EL
+    ORDEN EN QUE SE DECODIFICAN. La señal 0 (se decodifica primero, sufre la interferencia
+    de todas las demás) recibe la modulación MÁS ROBUSTA; la última (decodificada casi sin
+    interferencia gracias al SIC) usa la modulación seleccionada. Escalera descendente:
+    perfil_parc("64-QAM", 4) → ['QPSK', 'QPSK', '16-QAM', '64-QAM'].
     """
-    mod = MODULACIONES[modulacion]
+    idx = _ORDEN_MODS_PARC.index(modulacion)
+    return [_ORDEN_MODS_PARC[max(0, idx - (n_senales - 1 - i))] for i in range(n_senales)]
+
+
+def _sic_rx(R: np.ndarray, Hg: np.ndarray, perfil: list, carga_ruido: float,
+            usar_sic: bool = True) -> Tuple[list, list]:
+    """
+    Receptor de multiplexación espacial, VECTORIZADO por subportadora (numpy resuelve un
+    sistema por subportadora en lote).
+      - R      : recibido por antena, forma (N_R, N_SC).
+      - Hg     : canal efectivo (incluye 1/√N_T), forma (N_R, N_T, N_SC).
+      - perfil : modulación de cada señal (PARC), en orden de decodificación.
+      - carga_ruido : cargado N0/Es del MMSE. Por la normalización OFDM vale
+                      (potencia_recibida)·(N_SC/N_FFT)/SNR, NO simplemente 1/SNR.
+    Con usar_sic=True aplica el SIC de las diapos 206-207: por cada señal i,
+      1. detecta con MMSE tratando las señales i+1… como interferencia,
+      2. "decodifica" (demapeo por decisión dura → procesamiento NO LINEAL),
+      3. "re-encoding": re-mapea los bits → réplica limpia,
+      4. RESTA su contribución de todas las antenas (la señal i+1 ve SIR mejorada).
+    Con usar_sic=False detecta todas las señales con un único MMSE lineal (queda
+    interferencia residual entre señales): sirve para comparar y justificar el SIC.
+    Devuelve (bits por señal, símbolos detectados por señal).
+    """
+    n_rx, n_tx, n_sc = Hg.shape
+    Hg_t = np.transpose(Hg, (2, 0, 1))                        # (N_SC, N_R, N_T)
+    rs = np.transpose(R, (1, 0))[:, :, None]                  # (N_SC, N_R, 1)
+
+    if not usar_sic:
+        # --- Receptor LINEAL (referencia): un solo filtro MMSE para todas las señales ---
+        HgH = np.conj(np.transpose(Hg_t, (0, 2, 1)))          # (N_SC, N_T, N_R)
+        A = HgH @ Hg_t + carga_ruido * np.eye(n_tx)
+        S = (np.linalg.solve(A, HgH) @ rs)[:, :, 0]           # (N_SC, N_T)
+        bits = [MODULACIONES[perfil[i]]["demapear"](S[:, i]) for i in range(n_tx)]
+        return bits, [S[:, i] for i in range(n_tx)]
+
+    # --- SIC (diapo 207): detectar → decodificar → re-codificar → restar, por etapas ---
+    bits_por_senal, simbolos_por_senal = [], []
+    for i in range(n_tx):
+        Ha = Hg_t[:, :, i:]                                   # Señal i + las que AÚN interfieren
+        HaH = np.conj(np.transpose(Ha, (0, 2, 1)))            # (N_SC, N_ACT, N_R)
+        A = HaH @ Ha + carga_ruido * np.eye(n_tx - i)
+        s_est = (np.linalg.solve(A, HaH) @ rs)[:, 0, 0]       # 1. Detección MMSE de la señal i
+        mod = MODULACIONES[perfil[i]]
+        b = mod["demapear"](s_est)                            # 2. "Decoding" (decisión dura)
+        s_limpia = mod["mapear"](b)                           # 3. "Re-encoding" (réplica limpia)
+        rs = rs - Hg_t[:, :, i:i + 1] * s_limpia[:, None, None]   # 4. Cancela su interferencia
+        bits_por_senal.append(b)
+        simbolos_por_senal.append(s_est)
+    return bits_por_senal, simbolos_por_senal
+
+
+def cadena_tx_mimo_rx(bits_tx: np.ndarray, modulacion: str, params: Dict,
+                      snr_db: float, rng: np.random.Generator,
+                      capturar_constelaciones: bool = False,
+                      n_tx: int = 2, n_rx: int = 2,
+                      usar_sic: bool = True, usar_parc: bool = True) -> Dict:
+    """
+    Núcleo de la Práctica 6 (multiplexación espacial multi-codeword + SIC):
+
+      - n_tx == 1  -> SISO de referencia (1 señal, sin interferencia).
+      - n_tx >= 2  -> N_T señales independientes simultáneas. Cada uso de canal transporta
+                      n_sc·Σbps bits (la tasa crece ≈×N_L y el tiempo de aire se divide),
+                      a costa de interferencia mutua entre señales, que el receptor SIC
+                      cancela por etapas (usar_sic=False deja el lineal para comparar).
+
+    `modulacion` es la de la señal MENOS interferida; con usar_parc=True las primeras
+    señales usan modulaciones más robustas (escalera PARC); con usar_parc=False todas las
+    señales usan la misma modulación (aísla el efecto interferencia, útil en Monte Carlo).
+    Devuelve, además de bits/BER totales, la BER POR SEÑAL (evidencia la diferencia de
+    interferencia entre la primera y la última etapa del SIC).
+    """
     n_sc = params["n_sc"]
     n_fft = params["n_fft"]
     n_cp = params["n_cp"]
     fs = params["fs"]
-    bps = mod["bits"]
 
-    n_par = n_sc // 2                                   # Nº de pares Alamouti por símbolo OFDM
-    n_datos = n_par * 2                                 # Subportadoras de datos usadas (siempre par)
+    perfil = perfil_parc(modulacion, n_tx) if usar_parc else [modulacion] * n_tx
+    bps_list = [MODULACIONES[m]["bits"] for m in perfil]
+    bits_uso = n_sc * sum(bps_list)                     # Bits por uso de canal (todas las señales)
 
-    # --- TX: bits -> símbolos QAM (relleno a múltiplo de bps y de n_datos) ---
-    falta = (-len(bits_tx)) % bps
+    # --- TX: relleno a múltiplo de bits_uso y demultiplexado por uso de canal ---
+    falta = (-len(bits_tx)) % bits_uso
     if falta:
         bits_tx_pad = np.concatenate([bits_tx, np.zeros(falta, dtype=np.uint8)])
     else:
         bits_tx_pad = bits_tx
-    simbolos_qam = mod["mapear"](bits_tx_pad)
-    falta_sim = (-len(simbolos_qam)) % n_datos
-    if falta_sim:
-        simbolos_qam = np.concatenate([simbolos_qam, np.zeros(falta_sim, dtype=complex)])
-    n_ofdm = len(simbolos_qam) // n_datos
+    n_ofdm = len(bits_tx_pad) // bits_uso               # Nº de usos de canal a transmitir
 
-    constelacion_tx = simbolos_qam.copy() if capturar_constelaciones else None
-    simbolos_rx_datos = []
+    simbolos_rx_datos = []                              # Constelación tras el receptor (todas las señales)
+    simbolos_rx_antes = []                              # Recibido crudo en la antena 0 (señales mezcladas)
     bits_rx_total = []
+    err_flujo = np.zeros(n_tx, dtype=np.int64)          # Errores acumulados por señal (BER por señal)
+    tot_flujo = np.zeros(n_tx, dtype=np.int64)
 
     _, indices_fft = modulacion_ofdm(np.zeros(n_sc, dtype=complex), n_fft, n_cp)
-    esc = 1.0 / np.sqrt(2.0)                            # Reparto de potencia entre las 2 antenas TX
+    esc = 1.0 / np.sqrt(max(n_tx, 1))                   # Reparto de potencia 1/√N_T
+    snr_lin = 10 ** (snr_db / 10)
 
     for i in range(n_ofdm):
-        bloque = simbolos_qam[i * n_datos:(i + 1) * n_datos]
-        s0 = bloque[0::2]                              # Símbolo "par" del par (subportadora k)
-        s1 = bloque[1::2]                              # Símbolo "impar" del par (subportadora k+1)
+        bloque = bits_tx_pad[i * bits_uso:(i + 1) * bits_uso]
 
-        # Potencia de TX de referencia (1 antena) para el piso de ruido fijo opcional.
-        if ruido_piso_fijo:
-            grid_ref = np.zeros(n_sc, dtype=complex)
-            grid_ref[0::2][:n_par] = s0
-            grid_ref[1::2][:n_par] = s1
-            senal_ref, _ = modulacion_ofdm(grid_ref, n_fft, n_cp)
-            pot_ref = float(np.mean(np.abs(senal_ref) ** 2))
-        else:
-            pot_ref = None
+        # --- Demux (diapo 205) + "coding & modulation" POR SEÑAL (diapo 204) ---
+        flujos_bits, pos = [], 0
+        for m, bps in zip(perfil, bps_list):
+            flujos_bits.append(bloque[pos:pos + n_sc * bps])
+            pos += n_sc * bps
+        S = np.stack([MODULACIONES[m]["mapear"](fb) for m, fb in zip(perfil, flujos_bits)])
+        X = esc * S                                     # Mapeo a antenas (reparto de potencia)
 
-        if n_tx <= 1:
-            # --- Referencia: solo diversidad RX (MRC sobre n_rx antenas; ZF si n_rx=1) ---
-            x = np.zeros(n_sc, dtype=complex)
-            x[0::2][:n_par] = s0
-            x[1::2][:n_par] = s1
-            num = np.zeros(n_sc, dtype=complex)        # Σ conj(H)·Y  (MRC en RX)
-            den = np.zeros(n_sc, dtype=float)          # Σ |H|²
-            for _r in range(max(n_rx, 1)):
-                H = generar_canal_pedestrian_a(n_fft, fs, indices_fft, rng)
-                senal_canal, _ = modulacion_ofdm(x * H, n_fft, n_cp)
-                senal_rx = _agregar_ruido(senal_canal, snr_db, rng, pot_ref)
-                rejilla_rx = demodulacion_ofdm(senal_rx, indices_fft, n_fft, n_cp, n_sc)
-                num += np.conj(H) * rejilla_rx
-                den += np.abs(H) ** 2
-            rejilla_eq = num / (den + 1e-12)
-            datos_rx = np.empty(n_datos, dtype=complex)
-            datos_rx[0::2] = rejilla_eq[0::2][:n_par]
-            datos_rx[1::2] = rejilla_eq[1::2][:n_par]
-        else:
-            # --- SFBC (Alamouti, diversidad TX) + MRC (diversidad RX): la MEZCLA ---
-            x1 = np.zeros(n_sc, dtype=complex)         # Rejilla de la antena TX 1
-            x2 = np.zeros(n_sc, dtype=complex)         # Rejilla de la antena TX 2
-            x1[0::2][:n_par] = esc * s0                # Antena 1, subportadora k   ->  s0
-            x1[1::2][:n_par] = esc * s1                # Antena 1, subportadora k+1 ->  s1
-            x2[0::2][:n_par] = esc * (-np.conj(s1))    # Antena 2, subportadora k   -> -s1*
-            x2[1::2][:n_par] = esc * (np.conj(s0))     # Antena 2, subportadora k+1 ->  s0*
+        # --- CANAL MIMO: cada antena RX recibe la SUMA de las N_T señales + AWGN ---
+        H_full = np.zeros((n_rx, n_tx, n_sc), dtype=complex)
+        for r in range(n_rx):
+            for t in range(n_tx):
+                H_full[r, t] = generar_canal_pedestrian_a(n_fft, fs, indices_fft, rng)
+        R = np.zeros((n_rx, n_sc), dtype=complex)
+        pot_rx = 0.0
+        for r in range(n_rx):
+            senal = sum(modulacion_ofdm(X[t] * H_full[r, t], n_fft, n_cp)[0]
+                        for t in range(n_tx))           # Las señales SUMAN en el aire (interferencia)
+            pot_rx += float(np.mean(np.abs(senal) ** 2))
+            senal = agregar_ruido_awgn(senal, snr_db, rng)
+            R[r] = demodulacion_ofdm(senal, indices_fft, n_fft, n_cp, n_sc)
 
-            num0 = np.zeros(n_par, dtype=complex)      # Acumulador del estimador de s0
-            num1 = np.zeros(n_par, dtype=complex)      # Acumulador del estimador de s1
-            den = np.zeros(n_par, dtype=float)         # Σ (|h1|²+|h2|²) sobre las antenas RX (MRC)
-            for _r in range(n_rx):                     # ← SUMA sobre antenas RX = MRC (diversidad RX)
-                H1 = generar_canal_pedestrian_a(n_fft, fs, indices_fft, rng)  # Canal TX1 -> esta RX
-                H2 = generar_canal_pedestrian_a(n_fft, fs, indices_fft, rng)  # Canal TX2 -> esta RX
-                senal1, _ = modulacion_ofdm(x1 * H1, n_fft, n_cp)            # Aporte de la antena 1
-                senal2, _ = modulacion_ofdm(x2 * H2, n_fft, n_cp)            # Aporte de la antena 2
-                senal_rx = _agregar_ruido(senal1 + senal2, snr_db, rng, pot_ref)  # Se suman + AWGN
-                rejilla_rx = demodulacion_ofdm(senal_rx, indices_fft, n_fft, n_cp, n_sc)
-                r0 = rejilla_rx[0::2][:n_par]          # Recibido en la subportadora k
-                r1 = rejilla_rx[1::2][:n_par]          # Recibido en la subportadora k+1
-                h1 = H1[0::2][:n_par]                  # Canal TX1 en el par (H1[k] ≈ H1[k+1])
-                h2 = H2[0::2][:n_par]                  # Canal TX2 en el par
-                num0 += np.conj(h1) * r0 + h2 * np.conj(r1)   # ← combinación Alamouti (diversidad TX)
-                num1 += np.conj(h1) * r1 - h2 * np.conj(r0)
-                den += np.abs(h1) ** 2 + np.abs(h2) ** 2
-            # /esc deshace el reparto de potencia 1/√2 (devuelve la escala unitaria para el demapeo)
-            s0_est = (num0 / (den + 1e-12)) / esc
-            s1_est = (num1 / (den + 1e-12)) / esc
-            datos_rx = np.empty(n_datos, dtype=complex)
-            datos_rx[0::2] = s0_est
-            datos_rx[1::2] = s1_est
+        # --- RX: SIC no lineal (o MMSE lineal para comparar) ---
+        carga = (pot_rx / n_rx) * (n_sc / n_fft) / snr_lin     # N0/Es (medido y verificado)
+        bits_por_senal, simb_por_senal = _sic_rx(R, esc * H_full, perfil, carga, usar_sic)
 
+        # --- Remux + BER por señal ---
+        for t in range(n_tx):
+            err_flujo[t] += int(np.sum(flujos_bits[t] != bits_por_senal[t]))
+            tot_flujo[t] += len(flujos_bits[t])
+        bits_rx_total.append(np.concatenate(bits_por_senal))
         if capturar_constelaciones:
-            simbolos_rx_datos.append(datos_rx)
-        bits_rx_total.append(mod["demapear"](datos_rx))
+            simbolos_rx_datos.append(np.concatenate(simb_por_senal))
+            simbolos_rx_antes.append(R[0])
 
     bits_rx = np.concatenate(bits_rx_total) if bits_rx_total else np.array([], dtype=np.uint8)
     bits_rx = bits_rx[:len(bits_tx_pad)]
@@ -1072,11 +1102,18 @@ def cadena_tx_mimo_div_rx(bits_tx: np.ndarray, modulacion: str, params: Dict,
         "bits_rx": bits_rx[:len(bits_tx)],
         "ber": ber,
         "n_simbolos_ofdm": n_ofdm,
+        "perfil": perfil,
+        "ber_por_flujo": [
+            {"flujo": t + 1, "modulacion": perfil[t],
+             "ber": (float(err_flujo[t] / tot_flujo[t]) if tot_flujo[t] else 0.0)}
+            for t in range(n_tx)
+        ],
     }
     if capturar_constelaciones:
-        salida["constelacion_tx"] = constelacion_tx
         salida["constelacion_rx"] = (np.concatenate(simbolos_rx_datos)
                                      if simbolos_rx_datos else np.array([], dtype=complex))
+        if simbolos_rx_antes:
+            salida["constelacion_rx_antes"] = np.concatenate(simbolos_rx_antes)
     return salida
 
 
@@ -2084,11 +2121,12 @@ def montecarlo_beamforming():
 @app.route("/simular_mimo", methods=["POST"])
 def simular_mimo():
     """
-    Práctica 6 (diversidad combinada TX+RX): ejecuta UNA transmisión de la imagen cargada con
-    SFBC (Alamouti, 2 TX) + MRC (n_rx RX) en la configuración elegida (2x1 / 2x2 / 2x4). Para
-    la comparación "antes vs después" ejecuta además una cadena SISO 1x1 (sin diversidad) sobre
-    los mismos bits. Devuelve la imagen recuperada, la BER, la orden de diversidad (2·n_rx) y las
-    constelaciones RX sin diversidad (antes) y con SFBC+MRC (después).
+    Práctica 6 (multiplexación espacial multi-codeword + SIC): ejecuta UNA transmisión de la
+    imagen cargada con N_T señales independientes (perfil PARC: las primeras más robustas) y
+    receptor SIC, en la configuración elegida (2x2 / 3x3 / 4x4). Para evidenciar el beneficio
+    del procesamiento NO lineal ejecuta además la MISMA configuración con receptor LINEAL
+    (sin SIC) sobre los mismos bits. Devuelve la imagen recuperada, la BER total y POR SEÑAL,
+    las constelaciones (lineal vs SIC), el perfil PARC y los tiempos de envío (MIMO vs SISO).
     """
     data = request.get_json(force=True)
     try:
@@ -2101,28 +2139,35 @@ def simular_mimo():
     except KeyError as e:
         return jsonify({"error": f"Falta campo {e}"}), 400
 
-    CONFIGS = {"2x1": (2, 1), "2x2": (2, 2), "2x4": (2, 4)}           # Configuraciones SFBC+MRC válidas
+    CONFIGS = {"2x2": 2, "3x3": 3, "4x4": 4}                          # N_T = N_R = nº de señales
     if modulacion not in ESQUEMAS["OFDM"]["mods"]:                   # El transmisor de la práctica es OFDM
         return jsonify({"error": f"{modulacion} no está disponible en OFDM"}), 400
     if config not in CONFIGS:
-        return jsonify({"error": f"Configuración '{config}' no válida (use 2x1, 2x2 o 2x4)"}), 400
+        return jsonify({"error": f"Configuración '{config}' no válida (use 2x2, 3x3 o 4x4)"}), 400
     if ESTADO["bits"] is None:                                       # Debe haber una imagen cargada
         return jsonify({"error": "Primero suba una imagen"}), 400
 
-    n_tx, n_rx = CONFIGS[config]
+    n_ant = CONFIGS[config]
     bps = MODULACIONES[modulacion]["bits"]
     bits_tx = ESTADO["bits"]                                         # Bits de la imagen (mismo TX)
     params = calcular_parametros_ofdm(bw, df, cp, len(bits_tx), bps)
 
     rng = np.random.default_rng()
     t0 = time.perf_counter()
-    resultado = cadena_tx_mimo_div_rx(bits_tx, modulacion, params, snr, rng,   # "Después": SFBC+MRC elegido
-                                      capturar_constelaciones=True, n_tx=n_tx, n_rx=n_rx)
-    ref = cadena_tx_mimo_div_rx(bits_tx, modulacion, params, snr, rng,         # "Antes": SISO 1x1 sin diversidad
-                                capturar_constelaciones=True, n_tx=1, n_rx=1)
+    resultado = cadena_tx_mimo_rx(bits_tx, modulacion, params, snr, rng,   # "Después": PARC + SIC
+                                  capturar_constelaciones=True,
+                                  n_tx=n_ant, n_rx=n_ant, usar_sic=True, usar_parc=True)
+    ref = cadena_tx_mimo_rx(bits_tx, modulacion, params, snr, rng,         # "Antes": receptor LINEAL
+                            capturar_constelaciones=True,
+                            n_tx=n_ant, n_rx=n_ant, usar_sic=False, usar_parc=True)
     tiempo_computo_s = time.perf_counter() - t0
 
+    # Tiempo de envío: MIMO transporta n_sc·Σbps bits por uso de canal → menos símbolos OFDM.
+    # Se compara contra el SISO equivalente (1 señal con la modulación seleccionada).
     tiempo_aire_s = resultado["n_simbolos_ofdm"] * params["duracion_simbolo_us"] * 1e-6
+    n_ofdm_siso = math.ceil(len(bits_tx) / (params["n_sc"] * bps))
+    tiempo_aire_siso_s = n_ofdm_siso * params["duracion_simbolo_us"] * 1e-6
+
     img_rx = bits_a_imagen(resultado["bits_rx"], ESTADO["imagen_mode"], ESTADO["imagen_size"])
     img_tx = Image.open(io.BytesIO(ESTADO["imagen_bytes"]))
 
@@ -2132,16 +2177,18 @@ def simular_mimo():
             return arr[idx]
         return arr
 
-    c_rx = submuestrear(resultado["constelacion_rx"])
-    c_antes = submuestrear(ref["constelacion_rx"])
+    c_rx = submuestrear(resultado["constelacion_rx"])               # Tras el SIC (señales separadas y limpias)
+    c_antes = submuestrear(ref["constelacion_rx"])                  # Receptor lineal (interferencia residual)
     salida = {                                                      # Respuesta JSON al frontend
         "ber": resultado["ber"],
         "ber_antes": ref["ber"],
+        "ber_por_flujo": resultado["ber_por_flujo"],
+        "perfil": resultado["perfil"],
         "modulacion": modulacion,
         "config": config,
-        "n_tx": n_tx,
-        "n_rx": n_rx,
-        "orden_diversidad": n_tx * n_rx,
+        "n_tx": n_ant,
+        "n_rx": n_ant,
+        "n_senales": n_ant,
         "snr_db": snr,
         "bits_transmitidos": int(len(bits_tx)),
         "bits_erroneos": int(round(resultado["ber"] * len(bits_tx))),
@@ -2152,6 +2199,7 @@ def simular_mimo():
         "constelacion_rx_antes": {"real": c_antes.real.tolist(), "imag": c_antes.imag.tolist()},
         "parametros": params,
         "tiempo_aire_s": tiempo_aire_s,
+        "tiempo_aire_siso_s": tiempo_aire_siso_s,
         "tiempo_computo_s": tiempo_computo_s,
     }
     return jsonify(salida)
@@ -2160,15 +2208,18 @@ def simular_mimo():
 @app.route("/montecarlo_mimo", methods=["POST"])
 def montecarlo_mimo():
     """
-    Práctica 6: Monte Carlo de BER vs SNR para diversidad combinada TX+RX. Devuelve DOS conjuntos
-    de curvas:
-      - series_mimo: la combinación SFBC+MRC a distintos tamaños 2x1 / 2x2 / 2x4 (orden de
-        diversidad 2 / 4 / 8). Al subir n_rx la curva cae con MAYOR PENDIENTE.
-      - series_overlay: de dónde viene la diversidad, al mismo esfuerzo — SISO 1x1 (orden 1),
-        SFBC 2x1 (solo TX, orden 2), MRC 1x2 (solo RX, orden 2) y SFBC+MRC 2x2 (combinado,
-        orden 4). Muestra que combinar TX y RX MULTIPLICA la orden (2×2=4): la mezcla cae más
-        rápido que cualquiera de las diversidades por separado. Todas con la MISMA calibración de
-        ruido (al recibido). IC 95% con la t de Student.
+    Práctica 6: Monte Carlo de multiplexación espacial. Devuelve DOS resultados:
+      - series_ber: BER vs SNR con el ARRAY RECEPTOR FIJO en 4 antenas y un número
+        CRECIENTE de señales transmitidas (1x4 / 2x4 / 3x4 / 4x4), todas con la MISMA
+        modulación (sin PARC) para AISLAR el efecto interferencia: cada señal TX adicional
+        añade un interferente y consume grados de libertad del receptor → la BER EMPEORA
+        monotónicamente al aumentar las antenas TX (el precio de multiplicar la tasa).
+        Incluye además la curva 4x4 con receptor LINEAL (sin SIC) para evidenciar la
+        ganancia del procesamiento no lineal.
+      - series_tiempo: tiempo de envío (aire) de un mismo mensaje de referencia para cada
+        configuración: con N señales simultáneas se usan ~N veces menos símbolos OFDM → el
+        tiempo se divide por N. Es el BENEFICIO que compensa la interferencia.
+    IC 95% con la t de Student, misma metodología que las demás prácticas.
     """
     data = request.get_json(force=True)
     try:
@@ -2194,66 +2245,46 @@ def montecarlo_mimo():
     def corrida(funcion):                              # Genera bits nuevos y devuelve la BER de una corrida
         return lambda snr: funcion(rng.integers(0, 2, N_BITS_MC, dtype=np.uint8), snr)
 
-    # --- La mezcla SFBC+MRC a distintos tamaños: 2x1 / 2x2 / 2x4 (orden 2 / 4 / 8) ---
-    CONFIGS = [("2x1", 2, 1), ("2x2", 2, 2), ("2x4", 2, 4)]
-    series_mimo, curva_2x2 = [], None
-    for nombre, n_tx, n_rx in CONFIGS:
-        f = corrida(lambda bits, snr, n_tx=n_tx, n_rx=n_rx: cadena_tx_mimo_div_rx(
-            bits, modulacion, params, snr, rng, n_tx=n_tx, n_rx=n_rx)["ber"])
+    # --- BER vs SNR: array RX fijo (4 antenas) y 1/2/3/4 señales TX, con SIC ---
+    series_ber = []
+    for nombre, n_tx in [("1x4", 1), ("2x4", 2), ("3x4", 3), ("4x4", 4)]:
+        f = corrida(lambda bits, snr, n=n_tx: cadena_tx_mimo_rx(
+            bits, modulacion, params, snr, rng, n_tx=n, n_rx=4,
+            usar_sic=True, usar_parc=False)["ber"])
         ber_prom, ic_inf, ic_sup = _curva_ber_mc(f, snr_valores, n_sim, t_critico)
-        item = {"config": nombre, "orden": n_tx * n_rx,
-                "ber_promedio": ber_prom, "ic_inferior": ic_inf, "ic_superior": ic_sup}
-        series_mimo.append(item)
-        if nombre == "2x2":
-            curva_2x2 = item
+        series_ber.append({"config": nombre, "n_senales": n_tx,
+                           "ber_promedio": ber_prom, "ic_inferior": ic_inf, "ic_superior": ic_sup})
 
-    # --- Overlay: de dónde viene la diversidad (SISO / solo TX / solo RX / combinado) ---
-    f_siso = corrida(lambda bits, snr: cadena_tx_rx(
-        bits, modulacion, params, snr, rng, usar_dft_spread=False, n_rx=1)["ber"])
-    siso_prom, siso_inf, siso_sup = _curva_ber_mc(f_siso, snr_valores, n_sim, t_critico)
-    f_sfbc = corrida(lambda bits, snr: cadena_tx_sfbc_rx(
-        bits, modulacion, params, snr, rng, n_tx=2, n_rx=1)["ber"])
-    sfbc_prom, sfbc_inf, sfbc_sup = _curva_ber_mc(f_sfbc, snr_valores, n_sim, t_critico)
-    f_mrc = corrida(lambda bits, snr: cadena_tx_rx(
-        bits, modulacion, params, snr, rng, usar_dft_spread=False, n_rx=2)["ber"])
-    mrc_prom, mrc_inf, mrc_sup = _curva_ber_mc(f_mrc, snr_valores, n_sim, t_critico)
-    series_overlay = [
-        {"tecnica": "SISO 1x1", "ber_promedio": siso_prom, "ic_inferior": siso_inf, "ic_superior": siso_sup},
-        {"tecnica": "SFBC 2x1", "ber_promedio": sfbc_prom, "ic_inferior": sfbc_inf, "ic_superior": sfbc_sup},
-        {"tecnica": "MRC 1x2", "ber_promedio": mrc_prom, "ic_inferior": mrc_inf, "ic_superior": mrc_sup},
-        {"tecnica": "SFBC+MRC 2x2", "ber_promedio": curva_2x2["ber_promedio"],
-         "ic_inferior": curva_2x2["ic_inferior"], "ic_superior": curva_2x2["ic_superior"]},
-    ]
+    # 4x4 con receptor LINEAL (sin SIC): muestra cuánto aporta el procesamiento no lineal
+    f_lin = corrida(lambda bits, snr: cadena_tx_mimo_rx(
+        bits, modulacion, params, snr, rng, n_tx=4, n_rx=4,
+        usar_sic=False, usar_parc=False)["ber"])
+    lin_prom, lin_inf, lin_sup = _curva_ber_mc(f_lin, snr_valores, n_sim, t_critico)
+    series_ber.append({"config": "4x4-lineal", "n_senales": 4,
+                       "ber_promedio": lin_prom, "ic_inferior": lin_inf, "ic_superior": lin_sup})
 
-    return jsonify({                                   # Respuesta con los dos conjuntos de curvas
+    # --- Tiempo de envío (aire) por configuración, para un mismo mensaje de referencia ---
+    # Determinista (no requiere Monte Carlo): n_ofdm = ceil(bits / (n_sc·bps·N)) símbolos.
+    n_bits_ref = int(len(ESTADO["bits"])) if ESTADO["bits"] is not None else 1_000_000
+    series_tiempo = []
+    for nombre, n_ant in [("1x4", 1), ("2x4", 2), ("3x4", 3), ("4x4", 4)]:
+        bits_uso = params["n_sc"] * bps * n_ant        # Bits por uso de canal (N señales iguales)
+        n_ofdm = math.ceil(n_bits_ref / bits_uso)
+        t_aire_s = n_ofdm * params["duracion_simbolo_us"] * 1e-6
+        series_tiempo.append({"config": nombre, "n_senales": n_ant,
+                              "n_simbolos_ofdm": int(n_ofdm),
+                              "tiempo_aire_ms": float(t_aire_s * 1e3)})
+
+    return jsonify({                                   # Respuesta con ambos conjuntos
         "snr_valores": snr_valores,
         "n_simulaciones": n_sim,
         "t_critico": t_critico,
         "n_bits_mc": N_BITS_MC,
+        "n_bits_ref": n_bits_ref,
         "modulacion": modulacion,
-        "series_mimo": series_mimo,
-        "series_overlay": series_overlay,
+        "series_ber": series_ber,
+        "series_tiempo": series_tiempo,
     })
-
-
-_CODIGOS_CODIF = {"ninguno", "convolucional", "turbo"}
-_MODS_CODIF = ["QPSK", "16-QAM"]                       # el demapeo suave (LLR) cubre estas dos
-
-
-def texto_a_bits(texto):
-    """Texto (UTF-8) -> vector de bits (MSB primero)."""
-    data = texto.encode("utf-8")
-    if len(data) == 0:
-        return np.zeros(0, dtype=np.uint8)
-    return np.unpackbits(np.frombuffer(data, dtype=np.uint8))
-
-
-def bits_a_texto(bits):
-    """Vector de bits -> texto (UTF-8, reemplazando bytes inválidos por �)."""
-    n = (len(bits) // 8) * 8
-    if n == 0:
-        return ""
-    return np.packbits(bits[:n].astype(np.uint8)).tobytes().decode("utf-8", errors="replace")
 
 
 @app.route("/simular_codif", methods=["POST"])

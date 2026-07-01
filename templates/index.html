@@ -23,7 +23,7 @@
     <button class="tab-btn" data-tab="mrc">Diversidad RX (MRC)</button>
     <button class="tab-btn" data-tab="sfbc">Diversidad TX (SFBC)</button>
     <button class="tab-btn" data-tab="beamforming">Beamforming (MRT)</button>
-    <button class="tab-btn" data-tab="mimo">MIMO (Diversidad TX+RX)</button>
+    <button class="tab-btn" data-tab="mimo">MIMO (Multiplexación espacial)</button>
     <button class="tab-btn" data-tab="codif">Codificación de canal</button>
   </nav>
 
@@ -838,7 +838,7 @@
   </div>
   </div>
 
-  <!-- ============================ PESTAÑA MIMO — DIVERSIDAD COMBINADA TX+RX (Práctica 6) ============================ -->
+  <!-- ============================ PESTAÑA MIMO — MULTIPLEXACIÓN ESPACIAL + SIC (Práctica 6) ============================ -->
   <div class="tab-panel" id="panel-mimo">
   <div class="contenedor">
 
@@ -876,9 +876,9 @@
       </section>
 
       <section class="tarjeta">
-        <h2>Diversidad combinada TX + RX</h2>
+        <h2>Multiplexación espacial</h2>
         <div class="campo">
-          <label class="campo-label" for="mimo-modulacion">Modulación</label>
+          <label class="campo-label" for="mimo-modulacion">Modulación (señal menos interferida)</label>
           <select id="mimo-modulacion">
             <option value="QPSK">QPSK</option>
             <option value="16-QAM" selected>16-QAM</option>
@@ -886,18 +886,22 @@
           </select>
         </div>
         <div class="campo">
-          <label class="campo-label" for="mimo-config">Configuración MIMO (SFBC + MRC)</label>
+          <label class="campo-label" for="mimo-config">Configuración MIMO (N_T × N_R)</label>
           <select id="mimo-config">
-            <option value="2x1">2×1 (2 TX, 1 RX) — orden 2</option>
-            <option value="2x2" selected>2×2 (2 TX, 2 RX) — orden 4</option>
-            <option value="2x4">2×4 (2 TX, 4 RX) — orden 8</option>
+            <option value="2x2" selected>2×2 — 2 señales simultáneas</option>
+            <option value="3x3">3×3 — 3 señales simultáneas</option>
+            <option value="4x4">4×4 — 4 señales simultáneas</option>
           </select>
+        </div>
+        <div class="campo">
+          <label class="campo-label">Perfil PARC (robustez por señal)</label>
+          <div id="mimo-perfil-parc" class="estado" style="font-weight:700"></div>
         </div>
         <div class="campo">
           <label class="campo-label" for="mimo-snr">SNR recibida (dB)</label>
           <div class="slider-row">
-            <input type="range" id="mimo-snr" min="0" max="100" step="1" value="10" />
-            <input type="number" id="mimo-snr-num" min="0" max="100" step="1" value="10" />
+            <input type="range" id="mimo-snr" min="0" max="100" step="1" value="15" />
+            <input type="number" id="mimo-snr-num" min="0" max="100" step="1" value="15" />
           </div>
         </div>
         <div class="campo">
@@ -930,39 +934,41 @@
 
     <main class="principal">
 
-      <!-- Diagrama del sistema MIMO con diversidad combinada -->
+      <!-- Diagrama del sistema: TX multi-codeword (diapo 204) + RX SIC (diapo 207) -->
       <section class="tarjeta">
-        <h2>MIMO — Diversidad combinada: SFBC (TX) + MRC (RX)</h2>
+        <h2>Multiplexación espacial — TX Multi-Codeword + receptor no lineal (SIC)</h2>
         <p class="nota">
-          Esta práctica <strong>mezcla las dos diversidades</strong> ya vistas enviando la
-          <strong>misma información redundante</strong> por todas las antenas (no flujos distintos):
-          el <strong>transmisor usa 2 antenas con SFBC (Alamouti)</strong> — cada par de símbolos
-          <strong>(s<sub>0</sub>, s<sub>1</sub>)</strong> se envía como
-          <strong>[s<sub>0</sub>, s<sub>1</sub>]</strong> por la antena 1 y
-          <strong>[−s<sub>1</sub>*, s<sub>0</sub>*]</strong> por la 2 (cada una a ×1/√2) — y el
-          <strong>receptor combina con Alamouti + MRC sobre N<sub>R</sub> antenas</strong>. El
-          combinador de Alamouti recupera la diversidad de TX y la suma sobre las antenas RX
-          (ponderada por Σ|h|²) es MRC: recupera la diversidad de RX. La <strong>orden de diversidad
-          es el producto N<sub>T</sub>·N<sub>R</sub> = 2·N<sub>R</sub></strong> (2×1→2, 2×2→4, 2×4→8):
-          a mayor orden, la curva BER cae con <strong>mayor pendiente</strong>.
+          El transmisor envía <strong>N<sub>L</sub> señales completamente independientes a la
+          vez</strong>, una por antena: la tasa se multiplica por N<sub>L</sub> y el
+          <strong>tiempo de envío se divide</strong>. El precio: cada antena RX recibe la
+          <strong>suma de todas las señales</strong> — se <strong>interfieren mutuamente</strong>, y a más
+          antenas, más interferencia. En el <strong>TX multi-codeword</strong> cada señal tiene su
+          propio bloque de <em>coding &amp; modulation</em>, lo que permite darles <strong>distinta
+          robustez (PARC)</strong>: la primera señal en decodificarse (máxima interferencia) usa la
+          modulación más robusta. El receptor aplica <strong>SIC</strong> (procesamiento
+          <strong>no lineal</strong>): demodula y decodifica la 1ª señal, la <strong>re-codifica</strong>
+          y la <strong>resta</strong> de lo recibido; la 2ª se decodifica con SIR mejorada… y así
+          sucesivamente hasta la señal N<sub>L</sub>.
         </p>
         <div class="diagrama">
           <div class="bloque">Imagen<br>→ Bits</div>
           <span class="flecha">→</span>
-          <div class="bloque">Mapeo<br>QAM</div>
+          <div class="bloque">Demux<br>N_L señales</div>
           <span class="flecha">→</span>
-          <div class="bloque resaltado">Codif. SFBC<br>[s₀,s₁ ; −s₁*,s₀*]</div>
+          <div class="bloque resaltado">Coding &amp; Mod.<br>POR SEÑAL (PARC)</div>
           <span class="flecha">→</span>
-          <div class="bloque">2× IFFT<br>+ CP (2 TX)</div>
+          <div class="bloque">Mapeo a antenas<br>N_T× IFFT+CP</div>
           <span class="flecha">→</span>
-          <div class="bloque canal">Canales<br>+ AWGN (×N_R)</div>
+          <div class="bloque canal">Canal MIMO H<br>+ AWGN (×N_R)</div>
           <span class="flecha">→</span>
-          <div class="bloque resaltado" id="mimo-bloque-combinador">Alamouti + MRC<br>(N_R RX)</div>
+          <div class="bloque">Quita CP<br>+ FFT (×N_R)</div>
           <span class="flecha">→</span>
-          <div class="bloque">Demapeo<br>→ Imagen</div>
+          <div class="bloque resaltado">SIC: detectar →<br>decod → restar (×N_L)</div>
+          <span class="flecha">→</span>
+          <div class="bloque">Remux<br>→ Imagen</div>
         </div>
         <div class="estado" style="margin-top:8px">
-          Bloques resaltados = codificación SFBC (diversidad TX) y combinación Alamouti+MRC (diversidad RX): la mezcla de las Prácticas 3 y 4.
+          Bloques resaltados = modulación independiente por señal (TX multi-codeword, diap. 204) y cancelación sucesiva de interferencia (SIC, diap. 206-207).
         </div>
       </section>
 
@@ -970,7 +976,7 @@
         <h2>Simulación</h2>
         <div class="acciones" style="margin-top:4px; justify-content:center">
           <button id="mimo-btn-simular" class="boton boton-primario">Simular Transmisión (MIMO)</button>
-          <button id="mimo-btn-mc" class="boton boton-exito">Monte Carlo (Diversidad combinada)</button>
+          <button id="mimo-btn-mc" class="boton boton-exito">Monte Carlo (Multiplexación)</button>
         </div>
         <div id="mimo-estado-sim" class="estado" style="text-align:center; margin-top:10px"></div>
       </section>
@@ -986,24 +992,32 @@
             <h3>Imágenes TX / RX</h3>
             <div class="img-comparativa">
               <figure><img id="mimo-img-tx" alt="Original" /><figcaption>Original</figcaption></figure>
-              <figure><img id="mimo-img-rx" alt="Recuperada" /><figcaption>Recuperada (SFBC+MRC)</figcaption></figure>
+              <figure><img id="mimo-img-rx" alt="Recuperada" /><figcaption>Recuperada (SIC)</figcaption></figure>
             </div>
             <div class="ber-grande">
               <div class="lbl">BER</div>
               <div class="valor" id="mimo-ber-valor">—</div>
               <div class="lbl" id="mimo-ber-detalle"></div>
             </div>
+            <h3 style="margin-top:14px">BER por señal (orden de decodificación SIC)</h3>
+            <table>
+              <thead>
+                <tr><th>Señal</th><th>Modulación (PARC)</th><th>Interferentes al decodificar</th><th>BER</th></tr>
+              </thead>
+              <tbody id="mimo-tabla-flujos"></tbody>
+            </table>
+            <div class="estado" id="mimo-resumen-flujos" style="margin-top:6px"></div>
           </section>
           <section class="tarjeta">
-            <h3>Constelación RX — sin diversidad vs SFBC+MRC</h3>
+            <h3>Constelación RX — receptor lineal vs SIC</h3>
             <div class="img-comparativa">
               <figure>
                 <canvas id="mimo-constelacion-antes-canvas" class="constelacion-canvas" width="360" height="360"></canvas>
-                <figcaption id="mimo-titulo-antes">Sin diversidad (1×1, ZF)</figcaption>
+                <figcaption id="mimo-titulo-antes">Lineal (interferencia residual)</figcaption>
               </figure>
               <figure>
                 <canvas id="mimo-constelacion-despues-canvas" class="constelacion-canvas" width="360" height="360"></canvas>
-                <figcaption id="mimo-titulo-despues">SFBC+MRC 2×2</figcaption>
+                <figcaption id="mimo-titulo-despues">SIC (no lineal)</figcaption>
               </figure>
             </div>
             <div class="estado" id="mimo-resumen-constelacion" style="margin-top:6px"></div>
@@ -1309,29 +1323,50 @@
     </div>
   </div>
 
-  <!-- Modal Monte Carlo MIMO — Diversidad combinada -->
+  <!-- Modal Monte Carlo MIMO — Multiplexación espacial -->
   <div id="mimo-modal-mc" class="modal" style="display:none">
     <div class="modal-contenido">
       <div class="modal-header">
-        <h2 id="mimo-mc-titulo">MIMO — Diversidad combinada (SFBC+MRC) — Monte Carlo (BER vs SNR)</h2>
+        <h2 id="mimo-mc-titulo">MIMO — Multiplexación espacial — Monte Carlo</h2>
         <div class="modal-acciones">
           <button id="mimo-btn-descargar-mc" class="boton boton-exito">Descargar PNG</button>
           <button id="mimo-btn-cerrar-mc" class="boton boton-primario">Cerrar</button>
         </div>
       </div>
       <div class="modal-body">
-        <div class="estado" style="margin-bottom:10px">
-          <strong>Arriba:</strong> la mezcla SFBC+MRC a distintos tamaños (2×1 / 2×2 / 2×4). Al subir
-          N<sub>R</sub> la orden de diversidad crece (2 → 4 → 8) y la curva cae con <strong>mayor
-          pendiente</strong>. <strong>Abajo:</strong> de dónde viene la diversidad — SISO 1×1 (orden 1),
-          SFBC 2×1 (solo TX, orden 2), MRC 1×2 (solo RX, orden 2) y SFBC+MRC 2×2 (combinado, orden 4).
-          Combinar TX y RX <strong>multiplica</strong> la orden (2×2 = 4): la mezcla cae más rápido que
-          cualquier diversidad por separado. Bandas = IC 95% (t-Student).
+        <!-- Pestañas internas del modal: BER (interferencia) / Tiempo de envío -->
+        <div class="acciones" style="margin-bottom:12px">
+          <button id="mimo-mtab-ber" class="boton boton-primario">BER vs SNR (interferencia)</button>
+          <button id="mimo-mtab-tiempo" class="boton">Tiempo de envío</button>
         </div>
-        <h3 style="margin:0 0 8px 0">Órdenes de diversidad combinada — 2×1 / 2×2 / 2×4</h3>
-        <canvas id="mimo-montecarlo-canvas"></canvas>
-        <h3 style="margin:24px 0 8px 0">Origen de la diversidad — SISO vs SFBC (TX) vs MRC (RX) vs combinado</h3>
-        <canvas id="mimo-overlay-canvas"></canvas>
+
+        <div id="mimo-mc-vista-ber">
+          <div class="estado" style="margin-bottom:10px">
+            El <strong>array receptor se fija en 4 antenas</strong> y se aumenta el número de señales
+            transmitidas (1×4 → 2×4 → 3×4 → 4×4), todas con la <strong>misma modulación</strong> (sin PARC) para
+            aislar el efecto de la interferencia: <strong>cada señal TX adicional añade un interferente</strong>,
+            consume grados de libertad del receptor y reparte la potencia (1/√N) → la <strong>BER empeora al
+            aumentar las antenas TX</strong>. Ese es el precio de multiplicar la tasa. La curva
+            <strong>4×4 lineal (sin SIC)</strong> muestra cuánto aporta el procesamiento <strong>no lineal</strong>:
+            el SIC cancela la interferencia por etapas y queda por debajo del receptor lineal.
+            Bandas = IC 95% (t-Student).
+          </div>
+          <h3 style="margin:0 0 8px 0">BER vs SNR — 1×4 / 2×4 / 3×4 / 4×4 (SIC) + 4×4 lineal</h3>
+          <canvas id="mimo-montecarlo-canvas"></canvas>
+        </div>
+
+        <div id="mimo-mc-vista-tiempo" style="display:none">
+          <div class="estado" style="margin-bottom:10px">
+            Tiempo de envío (aire) del <strong>mismo mensaje</strong> con cada configuración: con
+            <strong>N señales simultáneas</strong> cada uso de canal transporta N veces más bits, así que se
+            necesitan ~N veces <strong>menos símbolos OFDM</strong> y el tiempo de envío se
+            <strong>divide por N</strong>. Este es el <strong>beneficio</strong> de la multiplexación espacial, que
+            compensa la mayor interferencia (pestaña BER): más antenas = <strong>menos tiempo</strong> pero
+            <strong>peor BER</strong> a igual SNR.
+          </div>
+          <h3 style="margin:0 0 8px 0" id="mimo-titulo-tiempo">Tiempo de envío vs configuración</h3>
+          <canvas id="mimo-tiempo-canvas"></canvas>
+        </div>
       </div>
     </div>
   </div>
