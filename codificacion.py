@@ -1,48 +1,49 @@
 """
 =====================================================================================
- CODIFICACIÓN DE CANAL LTE — Codificador y Decodificador (3GPP TS 36.212) — solo LEER
+ CODIFICACIÓN DE CANAL LTE — Codificador y Decodificador (Cap. 5, "Codificación de
+ Canal", diapositivas 4-37) — solo LEER
 =====================================================================================
  Este archivo NO ejecuta nada (no hay servidor, ni Monte Carlo, ni imágenes). Solo
  contiene las funciones de la cadena ordenadas en el orden en que ocurren los pasos:
  TRANSMISIÓN, CANAL y RECEPCIÓN.
 
- LTE define DOS códigos de canal en el estándar TS 36.212 (sección 5.1.3). Aquí están
- implementados los dos, más el CRC de detección de errores:
+ Se implementan los DOS códigos correctores de errores (FEC) de las diapositivas:
 
-   1) CÓDIGO CONVOLUCIONAL "tail-biting", tasa 1/3 (§5.1.3.1)
-      · Es el código de los canales de CONTROL de LTE (BCH, DCI…).
-      · Registro de 6 memorias (longitud de restricción 7, 64 estados).
-      · 3 polinomios generadores: G0=133, G1=171, G2=165 (en octal).
+   1) CÓDIGO CONVOLUCIONAL "tail-biting", tasa 1/3 (el del estándar LTE)
+      · "Sistema con memoria" (registro de desplazamiento + sumadores base 2).
+      · 6 memorias → longitud de restricción 7 → 64 estados. Genera 3 bits de código
+        por cada bit de entrada (polinomios generadores G0=133, G1=171, G2=165 octal).
       · "tail-biting": el registro se INICIALIZA con los últimos 6 bits del bloque, de
         modo que el estado inicial y el final coinciden (no se gastan bits de cola).
-      · Se decodifica con VITERBI de decisión suave (algoritmo de envoltura, WAVA).
+      · Decodificación = VITERBI: el codificador es una máquina de estados con un
+        diagrama de Trellis; Viterbi busca la secuencia MÁS PROBABLE en ese Trellis.
+        Como el tail-biting no fija el estado inicial/final, se usa el Viterbi de
+        ENVOLTURA (se recorre el bloque circular varias vueltas).
 
-   2) TURBO CÓDIGO, tasa 1/3 (§5.1.3.2)
-      · Es el código de los canales de DATOS de LTE (DL-SCH/UL-SCH). Rendimiento
-        casi-Shannon. Es el código emblemático de LTE.
-      · PCCC: dos codificadores RSC de 8 estados idénticos en paralelo, con un
-        ENTRELAZADOR QPP interno entre ellos.
-        - g0(D)=1+D²+D³ (realimentación),  g1(D)=1+D+D³ (paridad).
-      · Salida: x (sistemático) + z (paridad del 1.º) + z' (paridad del 2.º).
-      · Se decodifica con dos SISO MAP (BCJR max-log) que intercambian información
-        EXTRÍNSECA durante varias iteraciones (turbo = "realimentación").
+   2) TURBO CÓDIGO, tasa 1/3 (el del estándar LTE)
+      · "Codificación Convolucional Concatenada en Paralelo" (PCCC): DOS codificadores
+        constituyentes RSC (Recursivo Sistemático) de 8 estados separados por un
+        ENTRELAZADOR interno. Transfer: g0(D)=1+D²+D³ (realim.), g1(D)=1+D+D³ (paridad).
+      · Salida = 3 flujos: S (sistemático) + P1 (paridad del 1.º) + P2 (paridad del 2.º,
+        sobre los bits ENTRELAZADOS). Cada RSC se termina con bits de cola (longitud k+4).
+      · Entrelazador = QPP (Quadratic Polynomial Permutation): π(i)=(f1·i+f2·i²) mod k.
+      · Decodificación = 2 decodificadores APP (A Posteriori Probability, algoritmo BCJR)
+        en un LAZO DE REALIMENTACIÓN: se intercambian DECISIONES SUAVES a través del
+        entrelazador y se ITERA (~6-10 veces), mejorando la estimación en cada paso.
 
-   3) CRC-24A (§5.1.1): no corrige, solo DETECTA si el bloque llegó con errores. Es el
-      polinomio g(D)=D24+D23+D18+D17+D14+D11+D10+D7+D6+D5+D4+D3+D+1.
+ ¿Por qué codificar? Cada bit de información se ESPARCE en varios bits de código; el
+ receptor puede así CORREGIR errores. La corrección real se logra con DECISIÓN SUAVE: en
+ vez de decidir 0/1 en el demapeo, se pasa al decodificador un LLR (log-verosimilitud)
+ por bit, ponderado por la calidad |H[k]|² de su subportadora. Resultado: para la misma
+ SNR el BER baja mucho (GANANCIA DE CODIFICACIÓN), y el turbo supera al convolucional.
 
- ¿Por qué codificar? (slides "OFDM. Diversidad en f – Codificación de Canal"). Cada bit
- de información se ESPARCE entre varios bits de código; al mapearlos sobre subportadoras
- OFDM bien distribuidas, cada bit experimenta DIVERSIDAD en frecuencia y el receptor
- puede CORREGIR errores. Resultado: para la misma SNR, el BER baja mucho (GANANCIA DE
- CODIFICACIÓN). La corrección real se logra con DECISIÓN SUAVE: en vez de decidir 0/1 en
- el demapeo, se pasa al decodificador un LLR (log-verosimilitud) por bit, ponderado por
- la calidad |H[k]|² de su subportadora; los bits que cayeron en desvanecimientos pesan
- poco y los demás "votan" por ellos.
+ La FUENTE de bits puede ser una imagen o un TEXTO simple: para la cadena da igual, todo
+ es un vector de bits. (El texto es mucho más corto → la simulación es más rápida.)
 
  Flujo de un bloque:
-   bits info → CRC-24A → codificador (conv. o turbo) → QAM → IFFT+CP
+   bits info → codificador (conv. o turbo) → QAM → IFFT+CP
         → [canal Pedestrian A + ruido] → quita CP+FFT → ecualización ZF
-        → LLR (demapeo suave ponderado por |H|²) → decodificador → verificación CRC → bits
+        → LLR (demapeo suave ponderado por |H|²) → decodificador → bits info
 =====================================================================================
 """
 
@@ -50,18 +51,15 @@ import numpy as np
 
 
 # =====================================================================================
-# ||                 PARÁMETROS DEL ESTÁNDAR (TS 36.212)                              ||
+# ||                 PARÁMETROS DE LOS CÓDIGOS (LTE)                                  ||
 # =====================================================================================
 
-# CRC-24A (§5.1.1): posiciones (potencias de D) con coeficiente 1 en g(D).
-_CRC24A_POS = [24, 23, 18, 17, 14, 11, 10, 7, 6, 5, 4, 3, 1, 0]
-
-# Código convolucional tail-biting (§5.1.3.1): 3 generadores en octal y nº de memorias.
+# Código convolucional tail-biting (tasa 1/3): 3 generadores en octal y nº de memorias.
 G_CONV = (0o133, 0o171, 0o165)
 M_CONV = 6                                  # 6 memorias → 64 estados
 
-# Entrelazador QPP del turbo (Tabla 5.1.3-3): π(i) = (f1·i + f2·i²) mod K. Subconjunto
-# de tamaños de bloque K válidos del estándar con sus coeficientes (f1, f2).
+# Entrelazador QPP del turbo: π(i) = (f1·i + f2·i²) mod K. Subconjunto de tamaños de
+# bloque K válidos del estándar (de los 188 posibles, k=40…6144) con sus (f1, f2).
 QPP = {
     40:   (3,   10),
     512:  (31,  64),
@@ -77,33 +75,7 @@ K_TURBO = 512                               # Tamaño de bloque turbo usado por 
 # =====================================================================================
 
 # _____________________________________________________________________________________
-#  CRC-24A — ANEXAR                                                          Transmisión
-#  Entran los bits de información y salen esos mismos bits con 24 bits de CRC al final.
-#  El CRC es el resto de dividir (info·D²⁴) entre el polinomio g(D) en GF(2). Sirve para
-#  DETECTAR (no corregir) si el bloque llegó con errores tras decodificar.
-# _____________________________________________________________________________________
-def _crc24a_resto(bits):
-    poly = 0
-    for p in _CRC24A_POS:
-        poly |= (1 << p)
-    poly &= 0xFFFFFF                          # taps por debajo de D²⁴ (los 24 bits bajos)
-    reg = 0
-    for b in list(int(x) for x in bits) + [0] * 24:   # info seguida de 24 ceros
-        msb = (reg >> 23) & 1
-        reg = ((reg << 1) | b) & 0xFFFFFF
-        if msb:
-            reg ^= poly
-    return reg                                # resto de 24 bits
-
-
-def crc24a_anexar(bits):
-    resto = _crc24a_resto(bits)
-    crc = np.array([(resto >> i) & 1 for i in range(23, -1, -1)], dtype=np.uint8)  # MSB primero
-    return np.concatenate([bits.astype(np.uint8), crc])
-
-
-# _____________________________________________________________________________________
-#  CODIFICADOR CONVOLUCIONAL TAIL-BITING (R=1/3, §5.1.3.1)                   Transmisión
+#  CODIFICADOR CONVOLUCIONAL TAIL-BITING (tasa 1/3)                          Transmisión
 #  Entra el bloque de bits y salen 3 bits de código por cada bit de entrada (3 flujos
 #  d0,d1,d2). El registro se INICIALIZA con los últimos 6 bits del bloque (tail-biting):
 #  así el estado inicial y el final son iguales y no se gastan bits de cola.
@@ -144,7 +116,7 @@ def codificar_convolucional(bits):
 #  RSC DE 8 ESTADOS (constituyente del turbo) — TRELLIS                      Transmisión
 #  No codifica todavía: construye las tablas del codificador recursivo sistemático
 #  g0(D)=1+D²+D³ (realimentación), g1(D)=1+D+D³ (paridad). Para cada estado (3 bits) y
-#  cada bit de entrada da: estado siguiente, bit sistemático (= entrada) y bit de paridad.
+#  cada bit de entrada da: estado siguiente y bit de paridad (el sistemático = entrada).
 # _____________________________________________________________________________________
 def _rsc_trellis():
     nxt = np.zeros((8, 2), dtype=np.int64)
@@ -181,10 +153,10 @@ def _rsc_codificar(bits, trellis):
 
 
 # _____________________________________________________________________________________
-#  ENTRELAZADOR QPP (interno del turbo, §5.1.3.2.3)                          Transmisión
-#  Entra K y sale la permutación π(i)=(f1·i+f2·i²) mod K (los coeficientes vienen de la
-#  Tabla 5.1.3-3). Reordena los bits antes del 2.º codificador: es la pieza que hace que
-#  los dos codificadores "vean" el bloque de forma distinta (clave del turbo).
+#  ENTRELAZADOR QPP (interno del turbo)                                      Transmisión
+#  Entra K y sale la permutación π(i)=(f1·i+f2·i²) mod K. Reordena los bits antes del 2.º
+#  codificador: es la pieza que hace que los dos RSC "vean" el bloque de forma distinta
+#  (clave del turbo, y lo que permite corregir en el lazo iterativo del decodificador).
 # _____________________________________________________________________________________
 def qpp_interleaver(K):
     f1, f2 = QPP[K]
@@ -195,10 +167,10 @@ def qpp_interleaver(K):
 
 
 # _____________________________________________________________________________________
-#  CODIFICADOR TURBO (R=1/3, §5.1.3.2)                                       Transmisión
-#  Entra un bloque de K bits y salen los flujos del PCCC: sistemático x, paridad z del
-#  1.º RSC (sobre los bits en orden) y paridad z' del 2.º RSC (sobre los bits ENTRELAZADOS
-#  con QPP), más los bits de cola de terminación de ambos. Tasa ≈ 1/3.
+#  CODIFICADOR TURBO (tasa 1/3)                                              Transmisión
+#  Entra un bloque de K bits y salen los 3 flujos del PCCC: sistemático S, paridad P1 del
+#  1.º RSC (bits en orden) y paridad P2 del 2.º RSC (bits ENTRELAZADOS con QPP), más los
+#  bits de cola de terminación de ambos. Cada flujo tiene longitud K+4 → tasa ≈ 1/3.
 # _____________________________________________________________________________________
 def codificar_turbo(bits):
     bits = bits.astype(np.uint8)
@@ -352,11 +324,12 @@ def llr_16qam(s_eq, g):
 
 
 # _____________________________________________________________________________________
-#  DECODIFICADOR CONVOLUCIONAL — VITERBI SUAVE TAIL-BITING (WAVA)             Recepción
-#  Entran los LLR de los 3 flujos de código (K×3) y salen los K bits decodificados. Para
-#  el tail-biting (estado inicial = final, desconocido) se usa el Viterbi de ENVOLTURA:
-#  se recorre el bloque circular dos vueltas y se decodifica la 2.ª, ya con las métricas
-#  "calentadas". El metric usa los LLR (decisión SUAVE) → de ahí la ganancia.
+#  DECODIFICADOR CONVOLUCIONAL — VITERBI SUAVE TAIL-BITING                    Recepción
+#  Entran los LLR de los 3 flujos de código (K×3) y salen los K bits decodificados. El
+#  Trellis del código es una máquina de estados; Viterbi elige el camino (secuencia) más
+#  probable. Como el tail-biting no fija el estado inicial/final, se recorre el bloque
+#  CIRCULAR varias vueltas y se decodifica la última (ya con las métricas "calentadas").
+#  El metric usa los LLR (decisión SUAVE) → de ahí la ganancia frente a la decisión dura.
 # _____________________________________________________________________________________
 def _conv_trellis_completo():
     taps = _conv_taps()
@@ -376,13 +349,10 @@ def decodificar_convolucional(LLR, vueltas=4):
     nxt, out = _conv_trellis_completo()
     # Signo de la salida en ±1: (1-2·bit). Métrica de rama = Σ (1-2·bit)·LLR (a MAXIMIZAR).
     signo = 1 - 2 * out                                   # (64,2,3) en {+1,-1}
-    # Recorremos el bloque CIRCULAR varias vueltas: la 1.ª "calienta" las métricas para
-    # que al llegar a la última vuelta el estado inicial≈final del tail-biting ya esté
-    # bien estimado. Decodificamos la ÚLTIMA vuelta (la más fiable).
-    LLRv = np.concatenate([LLR] * vueltas)
+    LLRv = np.concatenate([LLR] * vueltas)                # varias vueltas (envoltura)
     T = vueltas * K
     NEG = -1e9
-    metrica = np.zeros(64)                                 # todas las arrancadas por igual
+    metrica = np.zeros(64)                                 # todas las arrancan por igual
     psd = np.zeros((T, 64), dtype=np.int64)               # estado previo (para traceback)
     psu = np.zeros((T, 64), dtype=np.int8)                # bit de entrada (para traceback)
     for t in range(T):
@@ -407,7 +377,7 @@ def decodificar_convolucional(LLR, vueltas=4):
 
 
 # _____________________________________________________________________________________
-#  BCJR max-log (SISO de un RSC) — apoyo del decodificador turbo             Recepción
+#  DECODIFICADOR APP (BCJR max-log de un RSC) — apoyo del turbo               Recepción
 #  Entran los LLR sistemático y de paridad de un RSC y el LLR a priori (la información que
 #  le pasa el OTRO decodificador) y sale el LLR EXTRÍNSECO de cada bit (lo que ESTE
 #  decodificador aporta de nuevo). Es media iteración del turbo.
@@ -421,7 +391,6 @@ def _bcjr_maxlog(Lsys, Lpar, La, term_sys, term_par, trellis):
     Lap = np.concatenate([La, np.zeros(3)])
     T = K + 3
     NEG = -1e9
-    # Rama γ por (paso, estado, entrada): ½[(1-2u)(La+Lsys) + (1-2·paridad)Lpar].
     su = (1 - 2 * np.arange(2))                            # ±1 según la entrada u
     alpha = np.full((T + 1, 8), NEG); alpha[0, 0] = 0.0    # arranca en estado 0
     beta = np.full((T + 1, 8), NEG); beta[T, 0] = 0.0      # termina en estado 0
@@ -430,6 +399,7 @@ def _bcjr_maxlog(Lsys, Lpar, La, term_sys, term_par, trellis):
         for s in range(8):
             for u in range(2):
                 sp = 1 - 2 * par[s, u]
+                # Rama γ = ½[(1-2u)(La+Lsys) + (1-2·paridad)·Lpar]
                 gamma[k, s, u] = 0.5 * (su[u] * (Lap[k] + Ls[k]) + sp * Lp[k])
     # Recursión hacia adelante (α) y hacia atrás (β), en max-log (suma-máximo).
     for k in range(T):
@@ -468,10 +438,11 @@ def _bcjr_maxlog(Lsys, Lpar, La, term_sys, term_par, trellis):
 
 
 # _____________________________________________________________________________________
-#  DECODIFICADOR TURBO (BCJR iterativo)                                       Recepción
+#  DECODIFICADOR TURBO (APP iterativo)                                        Recepción
 #  Entran los LLR sistemático, de paridad 1, de paridad 2 y de las colas, y salen los K
-#  bits. Los dos SISO se turnan pasándose información EXTRÍNSECA a través del entrelazador
-#  QPP; con cada iteración la estimación mejora (de ahí "turbo"). Decisión final por signo.
+#  bits. Los dos decodificadores APP se turnan pasándose información EXTRÍNSECA (decisión
+#  suave) a través del entrelazador QPP; con cada iteración la estimación mejora (de ahí
+#  "turbo"). Decisión final por signo del LLR total.
 # _____________________________________________________________________________________
 def decodificar_turbo(Lsys, Lpar1, Lpar2, Lt1s, Lt1p, Lt2s, Lt2p, perm, K, n_iter=6):
     trellis = _rsc_trellis()
@@ -487,19 +458,6 @@ def decodificar_turbo(Lsys, Lpar1, Lpar2, Lt1s, Lt1p, Lt2s, Lt2p, perm, K, n_ite
     return (L_total < 0).astype(np.uint8)                 # LLR<0 ⇒ bit 1
 
 
-# _____________________________________________________________________________________
-#  VERIFICACIÓN CRC-24A                                                       Recepción
-#  Entra el bloque decodificado (info + 24 bits de CRC) y dice si el CRC cuadra (True) o
-#  si se detectó un error residual (False). Devuelve también los bits de información.
-# _____________________________________________________________________________________
-def crc24a_verificar(bits):
-    info, crc_rx = bits[:-24], bits[-24:]
-    resto = _crc24a_resto(info)
-    crc_calc = np.array([(resto >> i) & 1 for i in range(23, -1, -1)], dtype=np.uint8)
-    ok = bool(np.array_equal(crc_calc, crc_rx))
-    return info, ok
-
-
 # =====================================================================================
 # ||   FLUJO COMPLETO — cómo se encadenan los pasos (un bloque de código)             ||
 # =====================================================================================
@@ -507,16 +465,15 @@ def crc24a_verificar(bits):
 # _____________________________________________________________________________________
 #  CADENA DE CODIFICACIÓN (un bloque)                                     Todo el flujo
 #  Entran los bits de información de UN bloque y el código elegido ("convolucional" o
-#  "turbo"); salen los bits de información recuperados y si el CRC cuadró. Recorre:
-#  CRC → codificar → QAM → OFDM → canal+ruido → OFDM⁻¹ → ZF → LLR(|H|²) → decodificar → CRC.
+#  "turbo"); salen los bits de información recuperados. Recorre:
+#  codificar → QAM → OFDM → canal+ruido → OFDM⁻¹ → ZF → LLR(|H|²) → decodificar.
 # _____________________________________________________________________________________
 def cadena_codificacion(bits_info, modulacion, codigo, n_sc, n_fft, n_cp, fs, snr_db, rng):
-    # --- TRANSMISIÓN: CRC + codificación de canal ---
-    bloque = crc24a_anexar(bits_info)                     # info + CRC-24A
+    # --- TRANSMISIÓN: codificación de canal ---
     if codigo == "convolucional":
-        bits_cod = codificar_convolucional(bloque)
+        bits_cod = codificar_convolucional(bits_info)
     else:                                                 # "turbo"
-        c = codificar_turbo(bloque)
+        c = codificar_turbo(bits_info)
         bits_cod = turbo_a_vector(c)
 
     # --- TRANSMISIÓN: QAM + OFDM (se rellena hasta llenar subportadoras de datos) ---
@@ -548,14 +505,13 @@ def cadena_codificacion(bits_info, modulacion, codigo, n_sc, n_fft, n_cp, fs, sn
     # --- RECEPCIÓN: demapeo SUAVE → LLR ponderados por |H|² ---
     llr = (llr_qpsk if modulacion == "QPSK" else llr_16qam)(s_eq, g)
 
-    # --- RECEPCIÓN: decodificación de canal + verificación de CRC ---
+    # --- RECEPCIÓN: decodificación de canal ---
     if codigo == "convolucional":
-        n_llr = 3 * len(bloque)
-        bloque_rx = decodificar_convolucional(llr[:n_llr])
+        n_llr = 3 * len(bits_info)
+        return decodificar_convolucional(llr[:n_llr])
     else:
-        K = len(bloque)
-        # Recupera los tramos de LLR en el mismo orden que turbo_a_vector().
-        o = 0
+        K = len(bits_info)
+        o = 0                                             # trocea el LLR como turbo_a_vector()
         Lsys = llr[o:o + K]; o += K
         Lp1 = llr[o:o + K];  o += K
         Lp2 = llr[o:o + K];  o += K
@@ -563,7 +519,4 @@ def cadena_codificacion(bits_info, modulacion, codigo, n_sc, n_fft, n_cp, fs, sn
         Lt1p = llr[o:o + 3]; o += 3
         Lt2s = llr[o:o + 3]; o += 3
         Lt2p = llr[o:o + 3]; o += 3
-        bloque_rx = decodificar_turbo(Lsys, Lp1, Lp2, Lt1s, Lt1p, Lt2s, Lt2p, c["perm"], K)
-
-    info_rx, crc_ok = crc24a_verificar(bloque_rx)
-    return info_rx, crc_ok
+        return decodificar_turbo(Lsys, Lp1, Lp2, Lt1s, Lt1p, Lt2s, Lt2p, c["perm"], K)

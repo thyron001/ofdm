@@ -1545,32 +1545,32 @@ function crearPanelBeamforming() {
 }
 
 // =====================================================================
-// === PANEL MULTIPLEXACIÓN ESPACIAL (MIMO) — Práctica 6             ===
+// === PANEL MIMO — DIVERSIDAD COMBINADA TX+RX (Práctica 6)          ===
 // =====================================================================
-// Panel propio (espejo de crearPanelBeamforming). El TX envía N_T flujos INDEPENDIENTES y el
-// RX los separa con ZF/MMSE/ML. Color de curva = receptor (arriba) o técnica (overlay del
-// trade-off diversidad/multiplexación).
-const COLORES_SMUX = { '1x1': '#888888', 'zf': '#D82A2A', 'mmse': '#1E54E0', 'ml': '#18A34B' };
-const ETIQUETAS_SMUX = { '1x1': '1×1 SISO (1 flujo)', 'zf': '2×2 ZF', 'mmse': '2×2 MMSE', 'ml': '2×2 ML' };
-const COLORES_OVERLAY_SMUX = { 'SMux 2x2': '#D82A2A', 'SFBC 2x2': '#E58A1A', 'MRC 1x2': '#18A34B' };
-const ETIQUETAS_OVERLAY_SMUX = {
-  'SMux 2x2': 'SMux 2×2 (2 flujos, ×2 tasa)', 'SFBC 2x2': 'SFBC 2×2 (1 flujo)', 'MRC 1x2': 'MRC 1×2 (1 flujo)',
+// Panel propio (espejo de crearPanelBeamforming). El TX envía la MISMA información con SFBC
+// (Alamouti, 2 TX) y el RX combina Alamouti + MRC sobre N_R antenas. Color = configuración
+// (arriba, 2×1/2×2/2×4) o técnica (overlay del origen de la diversidad).
+const COLORES_MIMO = { '2x1': '#1E54E0', '2x2': '#18A34B', '2x4': '#D82A2A' };
+const ETIQUETAS_MIMO = { '2x1': '2×1 (orden 2)', '2x2': '2×2 (orden 4)', '2x4': '2×4 (orden 8)' };
+const COLORES_OVERLAY_MIMO = { 'SISO 1x1': '#888888', 'SFBC 2x1': '#E58A1A', 'MRC 1x2': '#1E54E0', 'SFBC+MRC 2x2': '#18A34B' };
+const ETIQUETAS_OVERLAY_MIMO = {
+  'SISO 1x1': 'SISO 1×1 (orden 1)', 'SFBC 2x1': 'SFBC 2×1 (solo TX, o2)',
+  'MRC 1x2': 'MRC 1×2 (solo RX, o2)', 'SFBC+MRC 2x2': 'SFBC+MRC 2×2 (combinado, o4)',
 };
-const ETIQ_RECEPTOR = { 'zf': 'Zero-Forcing', 'mmse': 'MMSE', 'ml': 'Maximum-Likelihood' };
 
-function crearPanelSMUX() {
+function crearPanelMIMO() {
   const $ = (id) => document.getElementById(id);
   const estado = { imagenSubida: false, nBits: 0, graficoMC: null, graficoOverlay: null };
 
   // ---------- Parámetros ----------
   function validarCombinacion() {
-    const ok = !COMBINACIONES_NO_VALIDAS.has(`${$('smux-bw').value}_${$('smux-df').value}`);
-    $('smux-aviso-combinacion').style.display = ok ? 'none' : 'block';
+    const ok = !COMBINACIONES_NO_VALIDAS.has(`${$('mimo-bw').value}_${$('mimo-df').value}`);
+    $('mimo-aviso-combinacion').style.display = ok ? 'none' : 'block';
     return ok;
   }
   function actualizarOpcionesCP() {
-    const df = $('smux-df').value;
-    const cp = $('smux-cp');
+    const df = $('mimo-df').value;
+    const cp = $('mimo-cp');
     if (df === '15') {
       cp.innerHTML = '<option value="normal">Normal (4.7 µs)</option>' +
                      '<option value="extendido">Extendido (16.67 µs)</option>';
@@ -1578,23 +1578,16 @@ function crearPanelSMUX() {
       cp.innerHTML = '<option value="extendido">Extendido (33.33 µs)</option>';
     }
   }
-  // El detector ML solo está disponible en 2×2 (en 4×4 hay demasiados candidatos).
-  function ajustarReceptor() {
-    const es2x2 = $('smux-config').value === '2x2';
-    const optML = $('smux-receptor').querySelector('option[value="ml"]');
-    if (optML) optML.disabled = !es2x2;
-    if (!es2x2 && $('smux-receptor').value === 'ml') $('smux-receptor').value = 'mmse';
-  }
   async function actualizarParametros() {
     if (!validarCombinacion()) {
-      $('smux-kv-params').innerHTML = '<div class="kv"><div class="kv-label">Combinación inválida</div></div>';
+      $('mimo-kv-params').innerHTML = '<div class="kv"><div class="kv-label">Combinación inválida</div></div>';
       return;
     }
     const payload = {
-      bw_mhz: parseFloat($('smux-bw').value),
-      delta_f_khz: parseFloat($('smux-df').value),
-      tipo_cp: $('smux-cp').value,
-      modulacion: $('smux-modulacion').value,
+      bw_mhz: parseFloat($('mimo-bw').value),
+      delta_f_khz: parseFloat($('mimo-df').value),
+      tipo_cp: $('mimo-cp').value,
+      modulacion: $('mimo-modulacion').value,
       n_bits: estado.nBits,
     };
     try {
@@ -1604,47 +1597,42 @@ function crearPanelSMUX() {
       });
       const j = await r.json();
       if (j.error) {
-        $('smux-kv-params').innerHTML = `<div class="kv"><div class="kv-label">Error</div><div class="kv-valor" style="font-size:13px">${j.error}</div></div>`;
+        $('mimo-kv-params').innerHTML = `<div class="kv"><div class="kv-label">Error</div><div class="kv-valor" style="font-size:13px">${j.error}</div></div>`;
         return;
       }
       renderKV(j);
     } catch (e) { console.error(e); }
   }
   function renderKV(p, extras = {}) {
-    const nL = parseInt(($('smux-config').value || '2x2').split('x')[0]);
+    const cfg = $('mimo-config').value || '2x2';
+    const [nTx, nRx] = cfg.split('x').map(Number);
     const items = [
       ['Subportadoras útiles (N_SC)', p.n_sc],
       ['Tamaño de la FFT (N_FFT)', p.n_fft],
       ['Frecuencia de muestreo (fs)', (p.fs / 1e6).toFixed(3) + ' MHz'],
       ['Muestras de prefijo cíclico (N_CP)', p.n_cp],
-      ['Antenas (N_T × N_R)', $('smux-config').value.replace('x', ' × ')],
-      ['Flujos espaciales (N_L)', nL],
-      ['Símbolos QAM por uso de canal', (p.n_sc * nL).toLocaleString() + ` (×${nL} vs SISO)`],
+      ['Antenas (N_T × N_R)', cfg.replace('x', ' × ')],
+      ['Orden de diversidad (N_T·N_R)', nTx * nRx],
+      ['Pares Alamouti por símbolo (N_SC/2)', Math.floor((p.n_sc || 0) / 2)],
       ['Bits totales de la imagen', (estado.nBits || 0).toLocaleString()],
-      ['Modulación aplicada', $('smux-modulacion').value],
-      ['Receptor', ETIQ_RECEPTOR[$('smux-receptor').value] || $('smux-receptor').value],
+      ['Modulación aplicada', $('mimo-modulacion').value],
     ];
     if (extras.tiempo_aire_s != null) items.push(['Tiempo de transmisión (aire)', formatearTiempo(extras.tiempo_aire_s)]);
-    if (extras.throughput_bps != null) items.push(['Throughput', (extras.throughput_bps / 1e6).toFixed(2) + ' Mb/s']);
-    if (extras.capacidad_mimo_bps_hz != null) {
-      items.push(['Capacidad MIMO (teórica)', extras.capacidad_mimo_bps_hz.toFixed(2) + ' b/s/Hz']);
-      items.push(['Capacidad SISO (teórica)', extras.capacidad_siso_bps_hz.toFixed(2) + ' b/s/Hz']);
-    }
-    $('smux-kv-params').innerHTML = items.map(([l, v]) =>
+    $('mimo-kv-params').innerHTML = items.map(([l, v]) =>
       `<div class="kv"><div class="kv-label">${l}</div><div class="kv-valor">${v}</div></div>`
     ).join('') +
       '<div class="kv" style="grid-column:1/-1"><div class="kv-label" style="font-size:12px">' +
-      'Multiplexación espacial: N_L flujos independientes (sin pilotos), reparto de potencia 1/√N_T. La capacidad crece LINEALMENTE con el nº de antenas.' +
+      'Diversidad combinada: SFBC (Alamouti, 2 TX) + MRC (N_R RX), misma información redundante y sin pilotos. Orden = N_T·N_R.' +
       '</div></div>';
   }
 
   // ---------- SNR slider ----------
   function sincSNR() {
-    $('smux-snr').addEventListener('input', () => { $('smux-snr-num').value = $('smux-snr').value; });
-    $('smux-snr-num').addEventListener('input', () => {
-      let v = parseInt($('smux-snr-num').value || '0');
+    $('mimo-snr').addEventListener('input', () => { $('mimo-snr-num').value = $('mimo-snr').value; });
+    $('mimo-snr-num').addEventListener('input', () => {
+      let v = parseInt($('mimo-snr-num').value || '0');
       if (v < 0) v = 0; if (v > 100) v = 100;
-      $('smux-snr').value = v;
+      $('mimo-snr').value = v;
     });
   }
 
@@ -1654,12 +1642,12 @@ function crearPanelSMUX() {
     if (!file) return;
     const fd = new FormData();
     fd.append('imagen', file);
-    $('smux-info-imagen').textContent = 'Subiendo...';
+    $('mimo-info-imagen').textContent = 'Subiendo...';
     const r = await fetch('/subir_imagen', { method: 'POST', body: fd });
     const j = await r.json();
     if (j.error) {
-      $('smux-info-imagen').textContent = 'Error: ' + j.error;
-      $('smux-info-imagen').className = 'estado err';
+      $('mimo-info-imagen').textContent = 'Error: ' + j.error;
+      $('mimo-info-imagen').className = 'estado err';
       return;
     }
     broadcastImagen(j);   // actualiza esta pestaña y las otras
@@ -1668,13 +1656,13 @@ function crearPanelSMUX() {
     estado.imagenSubida = true;
     estado.nBits = info.n_bits;
     if (info.preview_b64) {
-      $('smux-preview-imagen').src = info.preview_b64;
-      $('smux-preview-imagen').style.display = 'block';
+      $('mimo-preview-imagen').src = info.preview_b64;
+      $('mimo-preview-imagen').style.display = 'block';
     }
-    $('smux-info-imagen').className = 'estado ok';
-    $('smux-info-imagen').textContent =
+    $('mimo-info-imagen').className = 'estado ok';
+    $('mimo-info-imagen').textContent =
       `${info.ancho}×${info.alto}, ${info.canales} canal(es), ${info.n_bits.toLocaleString()} bits ✓`;
-    $('smux-btn-simular').disabled = false;
+    $('mimo-btn-simular').disabled = false;
     actualizarParametros();
   }
 
@@ -1696,96 +1684,87 @@ function crearPanelSMUX() {
     }
   }
 
-  // ---------- Simulación única (imagen + constelaciones mezclado vs separado) ----------
+  // ---------- Simulación única (imagen + constelaciones sin diversidad vs SFBC+MRC) ----------
   async function ejecutarSimulacion() {
     if (!estado.imagenSubida) { alert('Sube una imagen primero'); return; }
-    $('smux-btn-simular').disabled = true;
-    $('smux-btn-simular').innerHTML = '<span class="spinner"></span> Simulando...';
-    $('smux-estado-sim').textContent = 'Ejecutando TX MIMO (N_T flujos) → canal → detector (separación de flujos)...';
-    $('smux-estado-sim').className = 'estado';
+    $('mimo-btn-simular').disabled = true;
+    $('mimo-btn-simular').innerHTML = '<span class="spinner"></span> Simulando...';
+    $('mimo-estado-sim').textContent = 'Ejecutando TX SFBC (2 antenas) → canales → combinador Alamouti + MRC...';
+    $('mimo-estado-sim').className = 'estado';
     const payload = {
-      bw_mhz: parseFloat($('smux-bw').value),
-      delta_f_khz: parseFloat($('smux-df').value),
-      tipo_cp: $('smux-cp').value,
-      snr_db: parseFloat($('smux-snr').value),
-      modulacion: $('smux-modulacion').value,
-      config: $('smux-config').value,
-      receptor: $('smux-receptor').value,
+      bw_mhz: parseFloat($('mimo-bw').value),
+      delta_f_khz: parseFloat($('mimo-df').value),
+      tipo_cp: $('mimo-cp').value,
+      snr_db: parseFloat($('mimo-snr').value),
+      modulacion: $('mimo-modulacion').value,
+      config: $('mimo-config').value,
     };
     try {
-      const r = await fetch('/simular_smux', {
+      const r = await fetch('/simular_mimo', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       });
       const j = await r.json();
       if (j.error) throw new Error(j.error);
       pintarResultados(j);
-      $('smux-estado-sim').textContent = 'Simulación completada ✓';
-      $('smux-estado-sim').className = 'estado ok';
+      $('mimo-estado-sim').textContent = 'Simulación completada ✓';
+      $('mimo-estado-sim').className = 'estado ok';
     } catch (e) {
-      $('smux-estado-sim').textContent = 'Error: ' + e.message;
-      $('smux-estado-sim').className = 'estado err';
+      $('mimo-estado-sim').textContent = 'Error: ' + e.message;
+      $('mimo-estado-sim').className = 'estado err';
     } finally {
-      $('smux-btn-simular').disabled = false;
-      $('smux-btn-simular').textContent = 'Simular Transmisión (MIMO)';
+      $('mimo-btn-simular').disabled = false;
+      $('mimo-btn-simular').textContent = 'Simular Transmisión (MIMO)';
     }
   }
   function pintarResultados(j) {
-    $('smux-zona-resultados').style.display = 'block';
-    $('smux-img-tx').src = j.imagen_original_b64;
-    $('smux-img-rx').src = j.imagen_recuperada_b64;
-    $('smux-ber-valor').textContent = (j.ber * 100).toFixed(3) + ' %';
+    $('mimo-zona-resultados').style.display = 'block';
+    $('mimo-img-tx').src = j.imagen_original_b64;
+    $('mimo-img-rx').src = j.imagen_recuperada_b64;
+    $('mimo-ber-valor').textContent = (j.ber * 100).toFixed(3) + ' %';
     const configTxt = (j.config || '').replace('x', '×');
-    const recTxt = ETIQ_RECEPTOR[j.receptor] || j.receptor;
-    $('smux-ber-detalle').textContent =
-      `${j.bits_erroneos.toLocaleString()} / ${j.bits_transmitidos.toLocaleString()} bits — ${j.n_simbolos_ofdm} usos de canal — MIMO ${configTxt} · ${recTxt} — SNR ${j.snr_db} dB`;
-    $('smux-bloque-detector').innerHTML = `Detector<br>${(j.receptor || 'zf').toUpperCase()}`;
-    $('smux-titulo-despues').textContent = `Flujos separados (${(j.receptor || 'zf').toUpperCase()})`;
+    $('mimo-ber-detalle').textContent =
+      `${j.bits_erroneos.toLocaleString()} / ${j.bits_transmitidos.toLocaleString()} bits — ${j.n_simbolos_ofdm} símbolos OFDM — SFBC+MRC ${configTxt} (orden ${j.orden_diversidad}) — SNR ${j.snr_db} dB`;
+    $('mimo-titulo-despues').textContent = `SFBC+MRC ${configTxt}`;
     if (j.constelacion_rx_antes) {
-      dibujarNube('smux-constelacion-antes-canvas', j.constelacion_rx_antes, j.modulacion, 'rgba(216,42,42,0.40)');
+      dibujarNube('mimo-constelacion-antes-canvas', j.constelacion_rx_antes, j.modulacion, 'rgba(216,42,42,0.45)');
     }
-    dibujarNube('smux-constelacion-despues-canvas', j.constelacion_rx, j.modulacion, 'rgba(24,163,75,0.5)');
-    const beraTxt = (typeof j.ber_antes === 'number') ? `${(j.ber_antes * 100).toFixed(3)} %` : '—';
-    const condTxt = (typeof j.cond_promedio === 'number') ? j.cond_promedio.toFixed(2) : '—';
-    $('smux-resumen-constelacion').textContent =
-      `Izquierda: lo recibido en una antena con los ${j.n_flujos} flujos MEZCLADOS (nube difusa). ` +
-      `Derecha: tras el detector ${recTxt}, los flujos quedan SEPARADOS. ` +
-      `Nº de condición medio de H ≈ ${condTxt} (mayor ⇒ más realce de ruido en ZF). ` +
-      `BER de referencia SISO 1×1 ≈ ${beraTxt}: la multiplexación tiene PEOR BER pero ${j.n_flujos}× la tasa.`;
-    renderKV(j.parametros, {
-      tiempo_aire_s: j.tiempo_aire_s, throughput_bps: j.throughput_bps,
-      capacidad_mimo_bps_hz: j.capacidad_mimo_bps_hz, capacidad_siso_bps_hz: j.capacidad_siso_bps_hz,
-    });
+    dibujarNube('mimo-constelacion-despues-canvas', j.constelacion_rx, j.modulacion, 'rgba(24,163,75,0.5)');
+    const beraTxt = (typeof j.ber_antes === 'number') ? ` (BER sin diversidad ≈ ${(j.ber_antes * 100).toFixed(3)} %)` : '';
+    $('mimo-resumen-constelacion').textContent =
+      `Izquierda: 1 sola antena TX/RX con ZF (dispersa por el desvanecimiento)${beraTxt}. ` +
+      `Derecha: SFBC+MRC ${configTxt} de orden ${j.orden_diversidad} (nube más compacta = menor error, gracias a combinar diversidad de TX y de RX).`;
+    renderKV(j.parametros, { tiempo_aire_s: j.tiempo_aire_s });
   }
 
-  // ---------- Monte Carlo (receptores + overlay del trade-off) ----------
+  // ---------- Monte Carlo (órdenes combinadas + overlay del origen de la diversidad) ----------
   async function ejecutarMontecarlo() {
-    $('smux-btn-mc').disabled = true;
-    $('smux-btn-mc').innerHTML = '<span class="spinner"></span> Ejecutando Monte Carlo...';
-    $('smux-estado-sim').textContent = 'Monte Carlo: receptores 2×2 (ZF/MMSE/ML) + overlay SMux/SFBC/MRC × 16 SNR × 8 corridas (puede tardar)...';
-    $('smux-estado-sim').className = 'estado';
+    $('mimo-btn-mc').disabled = true;
+    $('mimo-btn-mc').innerHTML = '<span class="spinner"></span> Ejecutando Monte Carlo...';
+    $('mimo-estado-sim').textContent = 'Monte Carlo: órdenes 2×1/2×2/2×4 + overlay SISO/SFBC/MRC/combinado × 16 SNR × 8 corridas (puede tardar)...';
+    $('mimo-estado-sim').className = 'estado';
     const payload = {
-      bw_mhz: parseFloat($('smux-bw').value),
-      delta_f_khz: parseFloat($('smux-df').value),
-      tipo_cp: $('smux-cp').value,
-      modulacion: $('smux-modulacion').value,
+      bw_mhz: parseFloat($('mimo-bw').value),
+      delta_f_khz: parseFloat($('mimo-df').value),
+      tipo_cp: $('mimo-cp').value,
+      modulacion: $('mimo-modulacion').value,
     };
     try {
-      const r = await fetch('/montecarlo_smux', {
+      const r = await fetch('/montecarlo_mimo', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       });
       const j = await r.json();
       if (j.error) throw new Error(j.error);
       pintarMC(j);
-      $('smux-estado-sim').textContent = 'Monte Carlo completado ✓';
-      $('smux-estado-sim').className = 'estado ok';
+      $('mimo-estado-sim').textContent = 'Monte Carlo completado ✓';
+      $('mimo-estado-sim').className = 'estado ok';
     } catch (e) {
-      $('smux-estado-sim').textContent = 'Error: ' + e.message;
-      $('smux-estado-sim').className = 'estado err';
+      $('mimo-estado-sim').textContent = 'Error: ' + e.message;
+      $('mimo-estado-sim').className = 'estado err';
     } finally {
-      $('smux-btn-mc').disabled = false;
-      $('smux-btn-mc').textContent = 'Monte Carlo (Multiplexación)';
+      $('mimo-btn-mc').disabled = false;
+      $('mimo-btn-mc').textContent = 'Monte Carlo (Diversidad combinada)';
     }
   }
   function construirGrafico(canvasId, series, claveEtiqueta, mapaColor, mapaEtiqueta, titulo) {
@@ -1831,20 +1810,20 @@ function crearPanelSMUX() {
     });
   }
   function pintarMC(j) {
-    $('smux-modal-mc').style.display = 'flex';
-    $('smux-mc-titulo').textContent = `Multiplexación espacial — BER vs SNR — ${j.modulacion}`;
+    $('mimo-modal-mc').style.display = 'flex';
+    $('mimo-mc-titulo').textContent = `MIMO — Diversidad combinada (SFBC+MRC) — BER vs SNR — ${j.modulacion}`;
     if (estado.graficoMC) estado.graficoMC.destroy();
     if (estado.graficoOverlay) estado.graficoOverlay.destroy();
-    estado.graficoMC = construirGrafico('smux-montecarlo-canvas', j.series_smux, 'receptor',
-      COLORES_SMUX, ETIQUETAS_SMUX, 'Receptores 2×2: ML ≤ MMSE ≤ ZF, todos por debajo de SISO');
-    estado.graficoOverlay = construirGrafico('smux-overlay-canvas', j.series_overlay, 'tecnica',
-      COLORES_OVERLAY_SMUX, ETIQUETAS_OVERLAY_SMUX, 'Trade-off: multiplexación (×2 tasa) vs diversidad (mejor BER)');
+    estado.graficoMC = construirGrafico('mimo-montecarlo-canvas', j.series_mimo, 'config',
+      COLORES_MIMO, ETIQUETAS_MIMO, 'Órdenes de diversidad combinada: a mayor N_R, mayor pendiente');
+    estado.graficoOverlay = construirGrafico('mimo-overlay-canvas', j.series_overlay, 'tecnica',
+      COLORES_OVERLAY_MIMO, ETIQUETAS_OVERLAY_MIMO, 'Combinar TX+RX multiplica la orden (2×2 = 4)');
   }
 
   // ---------- Descargar PNG (los dos gráficos apilados) ----------
   function descargarMC() {
     if (!estado.graficoMC) return;
-    const a = $('smux-montecarlo-canvas'), b = $('smux-overlay-canvas');
+    const a = $('mimo-montecarlo-canvas'), b = $('mimo-overlay-canvas');
     const tmp = document.createElement('canvas');
     tmp.width = Math.max(a.width, b.width); tmp.height = a.height + b.height + 20;
     const tctx = tmp.getContext('2d');
@@ -1852,7 +1831,7 @@ function crearPanelSMUX() {
     tctx.drawImage(a, 0, 0);
     tctx.drawImage(b, 0, a.height + 20);
     const link = document.createElement('a');
-    link.download = `mimo_smux_ber_snr_${Date.now()}.png`;
+    link.download = `mimo_diversidad_ber_snr_${Date.now()}.png`;
     link.href = tmp.toDataURL('image/png');
     link.click();
   }
@@ -1860,33 +1839,31 @@ function crearPanelSMUX() {
   // ---------- Cableado ----------
   function bind() {
     sincSNR();
-    ajustarReceptor();
-    $('smux-df').addEventListener('change', () => { actualizarOpcionesCP(); actualizarParametros(); validarCombinacion(); });
-    $('smux-bw').addEventListener('change', () => { actualizarParametros(); validarCombinacion(); });
-    $('smux-cp').addEventListener('change', actualizarParametros);
-    $('smux-modulacion').addEventListener('change', actualizarParametros);
-    $('smux-config').addEventListener('change', () => { ajustarReceptor(); actualizarParametros(); });
-    $('smux-receptor').addEventListener('change', actualizarParametros);
-    $('smux-archivo-imagen').addEventListener('change', subirImagen);
-    $('smux-btn-simular').addEventListener('click', ejecutarSimulacion);
-    $('smux-btn-mc').addEventListener('click', ejecutarMontecarlo);
-    ['smux-img-tx', 'smux-img-rx'].forEach((k) => {
+    $('mimo-df').addEventListener('change', () => { actualizarOpcionesCP(); actualizarParametros(); validarCombinacion(); });
+    $('mimo-bw').addEventListener('change', () => { actualizarParametros(); validarCombinacion(); });
+    $('mimo-cp').addEventListener('change', actualizarParametros);
+    $('mimo-modulacion').addEventListener('change', actualizarParametros);
+    $('mimo-config').addEventListener('change', actualizarParametros);
+    $('mimo-archivo-imagen').addEventListener('change', subirImagen);
+    $('mimo-btn-simular').addEventListener('click', ejecutarSimulacion);
+    $('mimo-btn-mc').addEventListener('click', ejecutarMontecarlo);
+    ['mimo-img-tx', 'mimo-img-rx'].forEach((k) => {
       $(k).addEventListener('click', () => {
         const lb = document.getElementById('lightbox');
         document.getElementById('lightbox-img').src = $(k).src;
         lb.style.display = 'flex';
       });
     });
-    $('smux-btn-cerrar-mc').addEventListener('click', () => { $('smux-modal-mc').style.display = 'none'; });
-    $('smux-btn-descargar-mc').addEventListener('click', descargarMC);
-    $('smux-modal-mc').addEventListener('click', (ev) => {
-      if (ev.target.id === 'smux-modal-mc') $('smux-modal-mc').style.display = 'none';
+    $('mimo-btn-cerrar-mc').addEventListener('click', () => { $('mimo-modal-mc').style.display = 'none'; });
+    $('mimo-btn-descargar-mc').addEventListener('click', descargarMC);
+    $('mimo-modal-mc').addEventListener('click', (ev) => {
+      if (ev.target.id === 'mimo-modal-mc') $('mimo-modal-mc').style.display = 'none';
     });
     actualizarParametros();
-    $('smux-btn-simular').disabled = true;
+    $('mimo-btn-simular').disabled = true;
   }
 
-  return { bind, notificarImagen, cerrarModal: () => { $('smux-modal-mc').style.display = 'none'; } };
+  return { bind, notificarImagen, cerrarModal: () => { $('mimo-modal-mc').style.display = 'none'; } };
 }
 
 // =====================================================================
@@ -1899,7 +1876,7 @@ const ETIQUETAS_CODIF = { ninguno: 'Sin codificar', convolucional: 'Convoluciona
 
 function crearPanelCodif() {
   const $ = (id) => document.getElementById(id);
-  const estado = { imagenSubida: false, nBits: 0, graficoMC: null };
+  const estado = { imagenSubida: false, nBits: 0, nBitsImg: 0, graficoMC: null };
 
   function validarCombinacion() {
     const ok = !COMBINACIONES_NO_VALIDAS.has(`${$('codif-bw').value}_${$('codif-df').value}`);
@@ -1942,7 +1919,7 @@ function crearPanelCodif() {
     } catch (e) { console.error(e); }
   }
   function renderKV(p) {
-    const bloques = estado.nBits ? Math.ceil(estado.nBits / 488) : 0;
+    const bloques = estado.nBits ? Math.ceil(estado.nBits / 512) : 0;
     const items = [
       ['Subportadoras útiles (N_SC)', p.n_sc],
       ['Tamaño de la FFT (N_FFT)', p.n_fft],
@@ -1951,14 +1928,14 @@ function crearPanelCodif() {
       ['Código de canal', ETIQUETAS_CODIF[$('codif-codigo').value] || $('codif-codigo').value],
       ['Tasa del código', '1/3'],
       ['Modulación aplicada', $('codif-modulacion').value],
-      ['Bits totales de la imagen', (estado.nBits || 0).toLocaleString()],
-      ['Bloques de código (488 bits + CRC-24)', bloques.toLocaleString()],
+      ['Bits de información', (estado.nBits || 0).toLocaleString()],
+      ['Bloques de código (512 bits)', bloques.toLocaleString()],
     ];
     $('codif-kv-params').innerHTML = items.map(([l, v]) =>
       `<div class="kv"><div class="kv-label">${l}</div><div class="kv-valor">${v}</div></div>`
     ).join('') +
       '<div class="kv" style="grid-column:1/-1"><div class="kv-label" style="font-size:12px">' +
-      'Cada bloque lleva CRC-24A + código R=1/3 (3 bits de salida por bit de info). La transmisión codificada usa ~3× símbolos OFDM.' +
+      'Código tasa 1/3 (3 bits de salida por cada bit de información): la transmisión codificada usa ~3× símbolos OFDM.' +
       '</div></div>';
   }
 
@@ -1969,6 +1946,19 @@ function crearPanelCodif() {
       if (v < 0) v = 0; if (v > 100) v = 100;
       $('codif-snr').value = v;
     });
+  }
+
+  // ---------- Fuente: texto simple o imagen ----------
+  function bitsDeTexto() {
+    return new TextEncoder().encode($('codif-texto').value || '').length * 8;
+  }
+  function actualizarFuente() {
+    const esTexto = $('codif-fuente').value === 'texto';
+    $('codif-campo-texto').style.display = esTexto ? '' : 'none';
+    $('codif-campo-imagen').style.display = esTexto ? 'none' : '';
+    estado.nBits = esTexto ? bitsDeTexto() : estado.nBitsImg;
+    $('codif-btn-simular').disabled = esTexto ? false : !estado.imagenSubida;
+    actualizarParametros();
   }
 
   async function subirImagen(e) {
@@ -1988,7 +1978,7 @@ function crearPanelCodif() {
   }
   function notificarImagen(info) {
     estado.imagenSubida = true;
-    estado.nBits = info.n_bits;
+    estado.nBitsImg = info.n_bits;
     if (info.preview_b64) {
       $('codif-preview-imagen').src = info.preview_b64;
       $('codif-preview-imagen').style.display = 'block';
@@ -1996,7 +1986,10 @@ function crearPanelCodif() {
     $('codif-info-imagen').className = 'estado ok';
     $('codif-info-imagen').textContent =
       `${info.ancho}×${info.alto}, ${info.canales} canal(es), ${info.n_bits.toLocaleString()} bits ✓`;
-    $('codif-btn-simular').disabled = false;
+    if ($('codif-fuente').value === 'imagen') {
+      estado.nBits = info.n_bits;
+      $('codif-btn-simular').disabled = false;
+    }
     actualizarParametros();
   }
 
@@ -2018,7 +2011,9 @@ function crearPanelCodif() {
   }
 
   async function ejecutarSimulacion() {
-    if (!estado.imagenSubida) { alert('Sube una imagen primero'); return; }
+    const fuente = $('codif-fuente').value;
+    if (fuente === 'imagen' && !estado.imagenSubida) { alert('Sube una imagen o cambia la fuente a Texto'); return; }
+    if (fuente === 'texto' && !($('codif-texto').value || '').trim()) { alert('Escribe un texto para transmitir'); return; }
     $('codif-btn-simular').disabled = true;
     $('codif-btn-simular').innerHTML = '<span class="spinner"></span> Simulando...';
     $('codif-estado-sim').textContent = 'Codificando, transmitiendo y decodificando (turbo puede tardar)...';
@@ -2030,6 +2025,8 @@ function crearPanelCodif() {
       snr_db: parseFloat($('codif-snr').value),
       modulacion: $('codif-modulacion').value,
       codigo: $('codif-codigo').value,
+      fuente: fuente,
+      texto: $('codif-texto').value,
     };
     try {
       const r = await fetch('/simular_codif', {
@@ -2051,11 +2048,22 @@ function crearPanelCodif() {
   }
   function pintarResultados(j) {
     $('codif-zona-resultados').style.display = 'block';
-    $('codif-img-tx').src = j.imagen_original_b64;
-    $('codif-img-rx').src = j.imagen_recuperada_b64;
-    $('codif-img-rx-sin').src = j.imagen_recuperada_sin_b64;
     const etq = ETIQUETAS_CODIF[j.codigo] || j.codigo;
-    $('codif-cap-rx').textContent = `Recuperada (${etq})`;
+    if (j.fuente === 'texto') {
+      $('codif-res-texto').style.display = 'block';
+      $('codif-res-imagen').style.display = 'none';
+      $('codif-texto-tx').textContent = j.texto_original || '';
+      $('codif-texto-rx').textContent = j.texto_recuperado || '';
+      $('codif-texto-rx-sin').textContent = j.texto_recuperado_sin || '';
+      $('codif-lbl-texto-rx').textContent = `Recuperado (${etq})`;
+    } else {
+      $('codif-res-texto').style.display = 'none';
+      $('codif-res-imagen').style.display = 'block';
+      $('codif-img-tx').src = j.imagen_original_b64;
+      $('codif-img-rx').src = j.imagen_recuperada_b64;
+      $('codif-img-rx-sin').src = j.imagen_recuperada_sin_b64;
+      $('codif-cap-rx').textContent = `Recuperada (${etq})`;
+    }
     $('codif-ber-valor').textContent = (j.ber * 100).toFixed(3) + ' %';
     $('codif-ber-detalle').textContent =
       `${j.bits_erroneos.toLocaleString()} / ${j.bits_transmitidos.toLocaleString()} bits — ${j.n_simbolos_ofdm} símbolos OFDM — ${etq} — SNR ${j.snr_db} dB`;
@@ -2065,7 +2073,7 @@ function crearPanelCodif() {
       `Sin codificar: BER ≈ <strong>${(j.ber_sin * 100).toFixed(3)} %</strong> (${j.bits_erroneos_sin.toLocaleString()} bits err). ` +
       `Con ${etq}: BER ≈ <strong>${(j.ber * 100).toFixed(3)} %</strong> ` +
       `(reducción ≈ <strong>${mejoraTxt}</strong>). ` +
-      `Bloques con error detectado por CRC: <strong>${j.n_bloques_error} / ${j.n_bloques}</strong>.`;
+      `Bloques de código transmitidos: <strong>${j.n_bloques}</strong>.`;
     if (j.constelacion_rx) {
       dibujarNube('codif-constelacion-canvas', j.constelacion_rx, j.modulacion, 'rgba(30,84,224,0.45)');
     }
@@ -2166,6 +2174,8 @@ function crearPanelCodif() {
     $('codif-cp').addEventListener('change', actualizarParametros);
     $('codif-modulacion').addEventListener('change', actualizarParametros);
     $('codif-codigo').addEventListener('change', actualizarParametros);
+    $('codif-fuente').addEventListener('change', actualizarFuente);
+    $('codif-texto').addEventListener('input', () => { estado.nBits = bitsDeTexto(); actualizarParametros(); });
     $('codif-archivo-imagen').addEventListener('change', subirImagen);
     $('codif-btn-simular').addEventListener('click', ejecutarSimulacion);
     $('codif-btn-mc').addEventListener('click', ejecutarMontecarlo);
@@ -2181,8 +2191,7 @@ function crearPanelCodif() {
     $('codif-modal-mc').addEventListener('click', (ev) => {
       if (ev.target.id === 'codif-modal-mc') $('codif-modal-mc').style.display = 'none';
     });
-    actualizarParametros();
-    $('codif-btn-simular').disabled = true;
+    actualizarFuente();
   }
 
   return { bind, notificarImagen, cerrarModal: () => { $('codif-modal-mc').style.display = 'none'; } };
@@ -2245,15 +2254,15 @@ window.addEventListener('DOMContentLoaded', () => {
   const panelMRC = crearPanelMRC();
   const panelSFBC = crearPanelSFBC();
   const panelBF = crearPanelBeamforming();
-  const panelSMUX = crearPanelSMUX();
+  const panelMIMO = crearPanelMIMO();
   const panelCodif = crearPanelCodif();
-  paneles.push(panelOFDM, panelSCFDM, panelMRC, panelSFBC, panelBF, panelSMUX, panelCodif);
+  paneles.push(panelOFDM, panelSCFDM, panelMRC, panelSFBC, panelBF, panelMIMO, panelCodif);
   panelOFDM.bind();
   panelSCFDM.bind();
   panelMRC.bind();
   panelSFBC.bind();
   panelBF.bind();
-  panelSMUX.bind();
+  panelMIMO.bind();
   panelCodif.bind();
   initTabs();
   initLightbox();
@@ -2267,7 +2276,7 @@ window.addEventListener('DOMContentLoaded', () => {
       panelMRC.cerrarModal();
       panelSFBC.cerrarModal();
       panelBF.cerrarModal();
-      panelSMUX.cerrarModal();
+      panelMIMO.cerrarModal();
       panelCodif.cerrarModal();
     }
   });

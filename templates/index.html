@@ -23,7 +23,7 @@
     <button class="tab-btn" data-tab="mrc">Diversidad RX (MRC)</button>
     <button class="tab-btn" data-tab="sfbc">Diversidad TX (SFBC)</button>
     <button class="tab-btn" data-tab="beamforming">Beamforming (MRT)</button>
-    <button class="tab-btn" data-tab="smux">Multiplexación espacial</button>
+    <button class="tab-btn" data-tab="mimo">MIMO (Diversidad TX+RX)</button>
     <button class="tab-btn" data-tab="codif">Codificación de canal</button>
   </nav>
 
@@ -838,16 +838,16 @@
   </div>
   </div>
 
-  <!-- ============================ PESTAÑA MULTIPLEXACIÓN ESPACIAL (Práctica 6) ============================ -->
-  <div class="tab-panel" id="panel-smux">
+  <!-- ============================ PESTAÑA MIMO — DIVERSIDAD COMBINADA TX+RX (Práctica 6) ============================ -->
+  <div class="tab-panel" id="panel-mimo">
   <div class="contenedor">
 
     <aside class="sidebar">
       <section class="tarjeta">
         <h2>Configuración OFDM (TX)</h2>
         <div class="campo">
-          <label class="campo-label" for="smux-bw">Ancho de Banda (BW)</label>
-          <select id="smux-bw">
+          <label class="campo-label" for="mimo-bw">Ancho de Banda (BW)</label>
+          <select id="mimo-bw">
             <option value="1.4">1.4 MHz</option>
             <option value="3">3 MHz</option>
             <option value="5" selected>5 MHz</option>
@@ -857,54 +857,47 @@
           </select>
         </div>
         <div class="campo">
-          <label class="campo-label" for="smux-df">Espaciamiento Δf</label>
-          <select id="smux-df">
+          <label class="campo-label" for="mimo-df">Espaciamiento Δf</label>
+          <select id="mimo-df">
             <option value="15" selected>15 kHz</option>
             <option value="7.5">7.5 kHz</option>
           </select>
         </div>
         <div class="campo">
-          <label class="campo-label" for="smux-cp">Prefijo Cíclico</label>
-          <select id="smux-cp">
+          <label class="campo-label" for="mimo-cp">Prefijo Cíclico</label>
+          <select id="mimo-cp">
             <option value="normal">Normal (4.7 µs)</option>
             <option value="extendido">Extendido (16.67 µs)</option>
           </select>
         </div>
-        <div id="smux-aviso-combinacion" class="aviso" style="display:none">
+        <div id="mimo-aviso-combinacion" class="aviso" style="display:none">
           Δf = 7.5 kHz no es compatible con BW &lt; 5 MHz.
         </div>
       </section>
 
       <section class="tarjeta">
-        <h2>Sistema MIMO</h2>
+        <h2>Diversidad combinada TX + RX</h2>
         <div class="campo">
-          <label class="campo-label" for="smux-modulacion">Modulación</label>
-          <select id="smux-modulacion">
+          <label class="campo-label" for="mimo-modulacion">Modulación</label>
+          <select id="mimo-modulacion">
             <option value="QPSK">QPSK</option>
             <option value="16-QAM" selected>16-QAM</option>
             <option value="64-QAM">64-QAM</option>
           </select>
         </div>
         <div class="campo">
-          <label class="campo-label" for="smux-config">Configuración MIMO</label>
-          <select id="smux-config">
-            <option value="2x2" selected>2×2 (2 flujos) — N_L = 2</option>
-            <option value="4x4">4×4 (4 flujos) — N_L = 4</option>
+          <label class="campo-label" for="mimo-config">Configuración MIMO (SFBC + MRC)</label>
+          <select id="mimo-config">
+            <option value="2x1">2×1 (2 TX, 1 RX) — orden 2</option>
+            <option value="2x2" selected>2×2 (2 TX, 2 RX) — orden 4</option>
+            <option value="2x4">2×4 (2 TX, 4 RX) — orden 8</option>
           </select>
         </div>
         <div class="campo">
-          <label class="campo-label" for="smux-receptor">Receptor (detector)</label>
-          <select id="smux-receptor">
-            <option value="zf">Zero-Forcing (ZF)</option>
-            <option value="mmse" selected>MMSE</option>
-            <option value="ml">Maximum-Likelihood (ML) — solo 2×2</option>
-          </select>
-        </div>
-        <div class="campo">
-          <label class="campo-label" for="smux-snr">SNR recibida (dB)</label>
+          <label class="campo-label" for="mimo-snr">SNR recibida (dB)</label>
           <div class="slider-row">
-            <input type="range" id="smux-snr" min="0" max="100" step="1" value="15" />
-            <input type="number" id="smux-snr-num" min="0" max="100" step="1" value="15" />
+            <input type="range" id="mimo-snr" min="0" max="100" step="1" value="10" />
+            <input type="number" id="mimo-snr-num" min="0" max="100" step="1" value="10" />
           </div>
         </div>
         <div class="campo">
@@ -927,94 +920,93 @@
       <section class="tarjeta">
         <h2>Imagen</h2>
         <div class="campo">
-          <label class="campo-label" for="smux-archivo-imagen">Subir imagen (.png, .jpg, .bmp)</label>
-          <input type="file" id="smux-archivo-imagen" accept=".png,.jpg,.jpeg,.bmp" />
+          <label class="campo-label" for="mimo-archivo-imagen">Subir imagen (.png, .jpg, .bmp)</label>
+          <input type="file" id="mimo-archivo-imagen" accept=".png,.jpg,.jpeg,.bmp" />
         </div>
-        <img id="smux-preview-imagen" class="preview-imagen" alt="Preview" />
-        <div id="smux-info-imagen" class="estado"></div>
+        <img id="mimo-preview-imagen" class="preview-imagen" alt="Preview" />
+        <div id="mimo-info-imagen" class="estado"></div>
       </section>
     </aside>
 
     <main class="principal">
 
-      <!-- Diagrama del sistema con multiplexación espacial -->
+      <!-- Diagrama del sistema MIMO con diversidad combinada -->
       <section class="tarjeta">
-        <h2>Multiplexación Espacial — N_T flujos independientes (MIMO)</h2>
+        <h2>MIMO — Diversidad combinada: SFBC (TX) + MRC (RX)</h2>
         <p class="nota">
-          El <strong>transmisor usa N<sub>T</sub> antenas</strong> para enviar
-          <strong>N<sub>L</sub> = min(N<sub>T</sub>, N<sub>R</sub>) flujos de datos
-          INDEPENDIENTES y simultáneos</strong> (uno por antena), repartiendo la potencia por
-          <strong>1/√N<sub>T</sub></strong>. A diferencia de la diversidad (P3/P4) y el
-          beamforming (P5), que robustecen un solo flujo, aquí las antenas <strong>multiplican la
-          TASA por N<sub>L</sub></strong>. Modelo por subportadora: <strong>r̄[k] = H[k]·s̄[k] + n̄[k]</strong>.
-          El receptor SEPARA los flujos con <strong>Zero-Forcing</strong> (ŝ = H⁺·r, realza el ruido
-          si H está mal condicionada), <strong>MMSE</strong> (equilibra ruido e interferencia) o
-          <strong>ML</strong> (mínima distancia, óptimo en BER). Es el precio/beneficio inverso a la
-          diversidad: <strong>más tasa a costa de peor BER</strong> a igual SNR.
+          Esta práctica <strong>mezcla las dos diversidades</strong> ya vistas enviando la
+          <strong>misma información redundante</strong> por todas las antenas (no flujos distintos):
+          el <strong>transmisor usa 2 antenas con SFBC (Alamouti)</strong> — cada par de símbolos
+          <strong>(s<sub>0</sub>, s<sub>1</sub>)</strong> se envía como
+          <strong>[s<sub>0</sub>, s<sub>1</sub>]</strong> por la antena 1 y
+          <strong>[−s<sub>1</sub>*, s<sub>0</sub>*]</strong> por la 2 (cada una a ×1/√2) — y el
+          <strong>receptor combina con Alamouti + MRC sobre N<sub>R</sub> antenas</strong>. El
+          combinador de Alamouti recupera la diversidad de TX y la suma sobre las antenas RX
+          (ponderada por Σ|h|²) es MRC: recupera la diversidad de RX. La <strong>orden de diversidad
+          es el producto N<sub>T</sub>·N<sub>R</sub> = 2·N<sub>R</sub></strong> (2×1→2, 2×2→4, 2×4→8):
+          a mayor orden, la curva BER cae con <strong>mayor pendiente</strong>.
         </p>
         <div class="diagrama">
           <div class="bloque">Imagen<br>→ Bits</div>
           <span class="flecha">→</span>
           <div class="bloque">Mapeo<br>QAM</div>
           <span class="flecha">→</span>
-          <div class="bloque resaltado">Demux<br>N_T flujos</div>
+          <div class="bloque resaltado">Codif. SFBC<br>[s₀,s₁ ; −s₁*,s₀*]</div>
           <span class="flecha">→</span>
-          <div class="bloque">N<sub>T</sub>× IFFT<br>+ CP (N_T TX)</div>
+          <div class="bloque">2× IFFT<br>+ CP (2 TX)</div>
           <span class="flecha">→</span>
-          <div class="bloque canal">Canal MIMO<br>H + AWGN</div>
+          <div class="bloque canal">Canales<br>+ AWGN (×N_R)</div>
           <span class="flecha">→</span>
-          <div class="bloque">Quita CP<br>+ FFT (×N_R)</div>
-          <span class="flecha">→</span>
-          <div class="bloque resaltado" id="smux-bloque-detector">Detector<br>ZF/MMSE/ML</div>
+          <div class="bloque resaltado" id="mimo-bloque-combinador">Alamouti + MRC<br>(N_R RX)</div>
           <span class="flecha">→</span>
           <div class="bloque">Demapeo<br>→ Imagen</div>
         </div>
         <div class="estado" style="margin-top:8px">
-          Bloques resaltados = demultiplexado en flujos (TX) y separación de flujos (RX), lo que distingue la multiplexación espacial de las técnicas de diversidad.
+          Bloques resaltados = codificación SFBC (diversidad TX) y combinación Alamouti+MRC (diversidad RX): la mezcla de las Prácticas 3 y 4.
         </div>
       </section>
 
       <section class="tarjeta">
         <h2>Simulación</h2>
         <div class="acciones" style="margin-top:4px; justify-content:center">
-          <button id="smux-btn-simular" class="boton boton-primario">Simular Transmisión (MIMO)</button>
-          <button id="smux-btn-mc" class="boton boton-exito">Monte Carlo (Multiplexación)</button>
+          <button id="mimo-btn-simular" class="boton boton-primario">Simular Transmisión (MIMO)</button>
+          <button id="mimo-btn-mc" class="boton boton-exito">Monte Carlo (Diversidad combinada)</button>
         </div>
-        <div id="smux-estado-sim" class="estado" style="text-align:center; margin-top:10px"></div>
+        <div id="mimo-estado-sim" class="estado" style="text-align:center; margin-top:10px"></div>
       </section>
 
       <section class="tarjeta">
         <h2>Parámetros Calculados</h2>
-        <div id="smux-kv-params" class="kv-grid"></div>
+        <div id="mimo-kv-params" class="kv-grid"></div>
       </section>
 
-      <div id="smux-zona-resultados" style="display:none">
+      <div id="mimo-zona-resultados" style="display:none">
         <div class="grid-resultados">
           <section class="tarjeta">
             <h3>Imágenes TX / RX</h3>
             <div class="img-comparativa">
-              <figure><img id="smux-img-tx" alt="Original" /><figcaption>Original</figcaption></figure>
-              <figure><img id="smux-img-rx" alt="Recuperada" /><figcaption>Recuperada (MIMO)</figcaption></figure>
+              <figure><img id="mimo-img-tx" alt="Original" /><figcaption>Original</figcaption></figure>
+              <figure><img id="mimo-img-rx" alt="Recuperada" /><figcaption>Recuperada (SFBC+MRC)</figcaption></figure>
             </div>
             <div class="ber-grande">
               <div class="lbl">BER</div>
-              <div class="valor" id="smux-ber-valor">—</div>
-              <div class="lbl" id="smux-ber-detalle"></div>
+              <div class="valor" id="mimo-ber-valor">—</div>
+              <div class="lbl" id="mimo-ber-detalle"></div>
             </div>
           </section>
           <section class="tarjeta">
-            <h3>Constelación RX — flujos mezclados vs separados</h3>
+            <h3>Constelación RX — sin diversidad vs SFBC+MRC</h3>
             <div class="img-comparativa">
               <figure>
-                <canvas id="smux-constelacion-antes-canvas" class="constelacion-canvas" width="360" height="360"></canvas>
-                <figcaption id="smux-titulo-antes">Recibido sin separar (mezcla)</figcaption>
+                <canvas id="mimo-constelacion-antes-canvas" class="constelacion-canvas" width="360" height="360"></canvas>
+                <figcaption id="mimo-titulo-antes">Sin diversidad (1×1, ZF)</figcaption>
               </figure>
               <figure>
-                <canvas id="smux-constelacion-despues-canvas" class="constelacion-canvas" width="360" height="360"></canvas>
-                <figcaption id="smux-titulo-despues">Flujos separados (detector)</figcaption>
+                <canvas id="mimo-constelacion-despues-canvas" class="constelacion-canvas" width="360" height="360"></canvas>
+                <figcaption id="mimo-titulo-despues">SFBC+MRC 2×2</figcaption>
               </figure>
             </div>
-            <div class="estado" id="smux-resumen-constelacion" style="margin-top:6px"></div>
+            <div class="estado" id="mimo-resumen-constelacion" style="margin-top:6px"></div>
           </section>
         </div>
       </div>
@@ -1022,7 +1014,7 @@
   </div>
   </div>
 
-  <!-- ============================ PESTAÑA CODIFICACIÓN DE CANAL (Práctica 7) ============================ -->
+<!-- ============================ PESTAÑA CODIFICACIÓN DE CANAL (Práctica 7) ============================ -->
   <div class="tab-panel" id="panel-codif">
   <div class="contenedor">
 
@@ -1100,13 +1092,26 @@
       </section>
 
       <section class="tarjeta">
-        <h2>Imagen</h2>
+        <h2>Fuente de datos</h2>
         <div class="campo">
-          <label class="campo-label" for="codif-archivo-imagen">Subir imagen (.png, .jpg, .bmp)</label>
-          <input type="file" id="codif-archivo-imagen" accept=".png,.jpg,.jpeg,.bmp" />
+          <label class="campo-label" for="codif-fuente">Qué transmitir</label>
+          <select id="codif-fuente">
+            <option value="texto" selected>Texto simple (rápido)</option>
+            <option value="imagen">Imagen</option>
+          </select>
         </div>
-        <img id="codif-preview-imagen" class="preview-imagen" alt="Preview" />
-        <div id="codif-info-imagen" class="estado"></div>
+        <div class="campo" id="codif-campo-texto">
+          <label class="campo-label" for="codif-texto">Texto a transmitir</label>
+          <textarea id="codif-texto" rows="3" style="width:100%; resize:vertical; font-family:inherit; padding:8px; border-radius:8px; border:1px solid #C9D4E0">Hola, esto es una prueba de codificacion de canal LTE.</textarea>
+        </div>
+        <div id="codif-campo-imagen" style="display:none">
+          <div class="campo">
+            <label class="campo-label" for="codif-archivo-imagen">Subir imagen (.png, .jpg, .bmp)</label>
+            <input type="file" id="codif-archivo-imagen" accept=".png,.jpg,.jpeg,.bmp" />
+          </div>
+          <img id="codif-preview-imagen" class="preview-imagen" alt="Preview" />
+          <div id="codif-info-imagen" class="estado"></div>
+        </div>
       </section>
     </aside>
 
@@ -1114,20 +1119,18 @@
 
       <!-- Diagrama de la cadena de codificación de canal -->
       <section class="tarjeta">
-        <h2>Codificación de Canal LTE (3GPP TS 36.212)</h2>
+        <h2>Codificación de Canal LTE (convolucional y turbo)</h2>
         <p class="nota">
-          Cada bloque de información recibe un <strong>CRC-24A</strong> (detección de errores) y se
-          codifica con uno de los códigos del estándar: el <strong>convolucional tail-biting</strong>
-          R=1/3 (canales de control, decodificado con <strong>Viterbi</strong> suave) o el
-          <strong>turbo</strong> R=1/3 (canales de datos, decodificado con <strong>BCJR iterativo</strong>).
-          El receptor usa <strong>decisión suave (LLR)</strong> ponderada por |H[k]|²: los bits que
-          cayeron en un desvanecimiento pesan poco y los demás los corrigen. Resultado: para la misma
-          SNR el BER baja mucho (<strong>ganancia de codificación</strong>).
+          Cada bloque de información se codifica con uno de los códigos correctores del estándar LTE:
+          el <strong>convolucional tail-biting</strong> tasa 1/3 (decodificado con <strong>Viterbi</strong>
+          suave) o el <strong>turbo</strong> tasa 1/3 (dos codificadores + entrelazador QPP, decodificado
+          con dos decodificadores <strong>APP/BCJR iterativos</strong>). El receptor usa
+          <strong>decisión suave (LLR)</strong> ponderada por |H[k]|²: los bits que cayeron en un
+          desvanecimiento pesan poco y los demás los corrigen. Resultado: para la misma SNR el BER baja
+          mucho (<strong>ganancia de codificación</strong>), y el turbo supera al convolucional.
         </p>
         <div class="diagrama">
-          <div class="bloque">Imagen<br>→ Bits</div>
-          <span class="flecha">→</span>
-          <div class="bloque resaltado">CRC-24A</div>
+          <div class="bloque">Fuente<br>→ Bits</div>
           <span class="flecha">→</span>
           <div class="bloque resaltado" id="codif-bloque-codificador">Codificador<br>Turbo / Conv.</div>
           <span class="flecha">→</span>
@@ -1141,7 +1144,7 @@
           <span class="flecha">→</span>
           <div class="bloque resaltado" id="codif-bloque-decodificador">Decodificador<br>BCJR / Viterbi</div>
           <span class="flecha">→</span>
-          <div class="bloque">CRC?<br>→ Imagen</div>
+          <div class="bloque">Bits<br>→ Fuente</div>
         </div>
         <div class="estado" style="margin-top:8px">
           Bloques resaltados = lo que añade la codificación de canal respecto a una transmisión OFDM normal.
@@ -1163,13 +1166,30 @@
       </section>
 
       <div id="codif-zona-resultados" style="display:none">
-        <section class="tarjeta">
+        <section class="tarjeta" id="codif-res-texto" style="display:none">
+          <h3>Texto — Original vs Recuperado (codificado vs sin codificar)</h3>
+          <div class="campo">
+            <label class="campo-label">Original</label>
+            <div class="estado" id="codif-texto-tx" style="white-space:pre-wrap; text-align:left"></div>
+          </div>
+          <div class="campo">
+            <label class="campo-label" id="codif-lbl-texto-rx">Recuperado (codificado)</label>
+            <div class="estado ok" id="codif-texto-rx" style="white-space:pre-wrap; text-align:left"></div>
+          </div>
+          <div class="campo">
+            <label class="campo-label">Recuperado (sin codificar)</label>
+            <div class="estado" id="codif-texto-rx-sin" style="white-space:pre-wrap; text-align:left"></div>
+          </div>
+        </section>
+        <section class="tarjeta" id="codif-res-imagen" style="display:none">
           <h3>Imágenes — Original vs Recuperada (codificada vs sin codificar)</h3>
           <div class="img-comparativa">
             <figure><img id="codif-img-tx" alt="Original" /><figcaption>Original</figcaption></figure>
             <figure><img id="codif-img-rx" alt="Codificada" /><figcaption id="codif-cap-rx">Recuperada (codificada)</figcaption></figure>
             <figure><img id="codif-img-rx-sin" alt="Sin codificar" /><figcaption>Recuperada (sin codificar)</figcaption></figure>
           </div>
+        </section>
+        <section class="tarjeta" style="margin-top:16px">
           <div class="ber-grande">
             <div class="lbl">BER codificado</div>
             <div class="valor" id="codif-ber-valor">—</div>
@@ -1300,35 +1320,34 @@
     </div>
   </div>
 
-  <!-- Modal Monte Carlo Multiplexación espacial -->
-  <div id="smux-modal-mc" class="modal" style="display:none">
+  <!-- Modal Monte Carlo MIMO — Diversidad combinada -->
+  <div id="mimo-modal-mc" class="modal" style="display:none">
     <div class="modal-contenido">
       <div class="modal-header">
-        <h2 id="smux-mc-titulo">Multiplexación espacial — Monte Carlo (BER vs SNR)</h2>
+        <h2 id="mimo-mc-titulo">MIMO — Diversidad combinada (SFBC+MRC) — Monte Carlo (BER vs SNR)</h2>
         <div class="modal-acciones">
-          <button id="smux-btn-descargar-mc" class="boton boton-exito">Descargar PNG</button>
-          <button id="smux-btn-cerrar-mc" class="boton boton-primario">Cerrar</button>
+          <button id="mimo-btn-descargar-mc" class="boton boton-exito">Descargar PNG</button>
+          <button id="mimo-btn-cerrar-mc" class="boton boton-primario">Cerrar</button>
         </div>
       </div>
       <div class="modal-body">
         <div class="estado" style="margin-bottom:10px">
-          <strong>Arriba:</strong> receptores en 2×2 (ZF / MMSE / ML) y SISO 1×1 de referencia. Debe verse
-          <strong>ML ≤ MMSE ≤ ZF</strong> (el ML es óptimo; el ZF realza el ruido), y todos PEORES que SISO
-          a igual SNR porque reparten la potencia en 2 flujos.
-          <strong>Abajo:</strong> el <strong>trade-off diversidad/multiplexación</strong> al mismo nº de antenas —
-          <strong>SMux 2×2</strong> (2 flujos = DOBLE tasa) frente a <strong>SFBC 2×2</strong> y <strong>MRC 1×2</strong>
-          (1 flujo, mejor BER). La multiplexación paga BER por duplicar la tasa; la diversidad mejora la BER sin subir
-          la tasa. Bandas = IC 95% (t-Student).
+          <strong>Arriba:</strong> la mezcla SFBC+MRC a distintos tamaños (2×1 / 2×2 / 2×4). Al subir
+          N<sub>R</sub> la orden de diversidad crece (2 → 4 → 8) y la curva cae con <strong>mayor
+          pendiente</strong>. <strong>Abajo:</strong> de dónde viene la diversidad — SISO 1×1 (orden 1),
+          SFBC 2×1 (solo TX, orden 2), MRC 1×2 (solo RX, orden 2) y SFBC+MRC 2×2 (combinado, orden 4).
+          Combinar TX y RX <strong>multiplica</strong> la orden (2×2 = 4): la mezcla cae más rápido que
+          cualquier diversidad por separado. Bandas = IC 95% (t-Student).
         </div>
-        <h3 style="margin:0 0 8px 0">Receptores en 2×2 (ZF / MMSE / ML) + SISO 1×1</h3>
-        <canvas id="smux-montecarlo-canvas"></canvas>
-        <h3 style="margin:24px 0 8px 0">Trade-off — SMux 2×2 (doble tasa) vs SFBC 2×2 vs MRC 1×2</h3>
-        <canvas id="smux-overlay-canvas"></canvas>
+        <h3 style="margin:0 0 8px 0">Órdenes de diversidad combinada — 2×1 / 2×2 / 2×4</h3>
+        <canvas id="mimo-montecarlo-canvas"></canvas>
+        <h3 style="margin:24px 0 8px 0">Origen de la diversidad — SISO vs SFBC (TX) vs MRC (RX) vs combinado</h3>
+        <canvas id="mimo-overlay-canvas"></canvas>
       </div>
     </div>
   </div>
 
-  <!-- Modal Monte Carlo Codificación de canal -->
+<!-- Modal Monte Carlo Codificación de canal -->
   <div id="codif-modal-mc" class="modal" style="display:none">
     <div class="modal-contenido">
       <div class="modal-header">

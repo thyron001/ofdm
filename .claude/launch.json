@@ -6,7 +6,7 @@
       "runtimeExecutable": "python",
       "runtimeArgs": ["app.py"],
       "port": 5000,
-      "autoPort": false
+      "autoPort": true
     }
   ]
 }
