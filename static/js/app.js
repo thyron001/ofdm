@@ -1933,10 +1933,7 @@ function crearPanelCodif() {
     ];
     $('codif-kv-params').innerHTML = items.map(([l, v]) =>
       `<div class="kv"><div class="kv-label">${l}</div><div class="kv-valor">${v}</div></div>`
-    ).join('') +
-      '<div class="kv" style="grid-column:1/-1"><div class="kv-label" style="font-size:12px">' +
-      'Código tasa 1/3 (3 bits de salida por cada bit de información): la transmisión codificada usa ~3× símbolos OFDM.' +
-      '</div></div>';
+    ).join('');
   }
 
   function sincSNR() {

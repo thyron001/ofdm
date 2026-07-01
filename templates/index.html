@@ -1120,15 +1120,6 @@
       <!-- Diagrama de la cadena de codificación de canal -->
       <section class="tarjeta">
         <h2>Codificación de Canal LTE (convolucional y turbo)</h2>
-        <p class="nota">
-          Cada bloque de información se codifica con uno de los códigos correctores del estándar LTE:
-          el <strong>convolucional tail-biting</strong> tasa 1/3 (decodificado con <strong>Viterbi</strong>
-          suave) o el <strong>turbo</strong> tasa 1/3 (dos codificadores + entrelazador QPP, decodificado
-          con dos decodificadores <strong>APP/BCJR iterativos</strong>). El receptor usa
-          <strong>decisión suave (LLR)</strong> ponderada por |H[k]|²: los bits que cayeron en un
-          desvanecimiento pesan poco y los demás los corrigen. Resultado: para la misma SNR el BER baja
-          mucho (<strong>ganancia de codificación</strong>), y el turbo supera al convolucional.
-        </p>
         <div class="diagrama">
           <div class="bloque">Fuente<br>→ Bits</div>
           <span class="flecha">→</span>
@@ -1145,9 +1136,6 @@
           <div class="bloque resaltado" id="codif-bloque-decodificador">Decodificador<br>BCJR / Viterbi</div>
           <span class="flecha">→</span>
           <div class="bloque">Bits<br>→ Fuente</div>
-        </div>
-        <div class="estado" style="margin-top:8px">
-          Bloques resaltados = lo que añade la codificación de canal respecto a una transmisión OFDM normal.
         </div>
       </section>
 
