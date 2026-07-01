@@ -2300,8 +2300,8 @@ def simular_codif():
     t0 = time.perf_counter()
     res = cadena_tx_codif_rx(bits_tx, modulacion, codigo, params, snr, rng,    # con código
                              capturar_constelaciones=True)
-    ref = cadena_tx_codif_rx(bits_tx, modulacion, "ninguno", params, snr, rng)  # sin codificar
-    tiempo_computo_s = time.perf_counter() - t0
+    tiempo_computo_s = time.perf_counter() - t0           # tiempo de procesar SOLO el código elegido
+    ref = cadena_tx_codif_rx(bits_tx, modulacion, "ninguno", params, snr, rng)  # sin codificar (referencia)
 
     tiempo_aire_s = res["n_simbolos_ofdm"] * params["duracion_simbolo_us"] * 1e-6
     c_rx = res.get("constelacion_rx", np.array([], dtype=complex))
@@ -2372,9 +2372,11 @@ def montecarlo_codif():
         f = lambda snr, codigo=codigo: cadena_tx_codif_rx(
             rng.integers(0, 2, N_BITS_MC, dtype=np.uint8), modulacion, codigo,
             params, snr, rng)["ber"]
+        t0 = time.perf_counter()
         ber_prom, ic_inf, ic_sup = _curva_ber_mc(f, snr_valores, n_sim, t_critico)
+        tiempo_s = time.perf_counter() - t0               # tiempo total de esta curva (mismo trabajo por código)
         series_ber.append({"codigo": codigo, "ber_promedio": ber_prom,
-                           "ic_inferior": ic_inf, "ic_superior": ic_sup})
+                           "ic_inferior": ic_inf, "ic_superior": ic_sup, "tiempo_s": tiempo_s})
 
     return jsonify({
         "snr_valores": snr_valores,

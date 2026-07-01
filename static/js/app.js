@@ -2074,6 +2074,10 @@ function crearPanelCodif() {
       `Con ${etq}: BER ≈ <strong>${(j.ber * 100).toFixed(3)} %</strong> ` +
       `(reducción ≈ <strong>${mejoraTxt}</strong>). ` +
       `Bloques de código transmitidos: <strong>${j.n_bloques}</strong>.`;
+    if (j.tiempo_computo_s != null) {
+      $('codif-tiempo').style.display = 'inline-block';
+      $('codif-tiempo').textContent = `⏱ Tiempo de procesamiento (${etq}): ${formatearTiempo(j.tiempo_computo_s)}`;
+    }
     if (j.constelacion_rx) {
       dibujarNube('codif-constelacion-canvas', j.constelacion_rx, j.modulacion, 'rgba(30,84,224,0.45)');
     }
@@ -2117,7 +2121,8 @@ function crearPanelCodif() {
     if (estado.graficoMC) estado.graficoMC.destroy();
     const PISO = 1e-5;
     const datasets = j.series_ber.map((s) => ({
-      label: ETIQUETAS_CODIF[s.codigo] || s.codigo,
+      label: (ETIQUETAS_CODIF[s.codigo] || s.codigo) +
+             (s.tiempo_s != null ? ` — ${formatearTiempo(s.tiempo_s)}` : ''),
       data: s.ber_promedio.map((v, i) => ({ x: j.snr_valores[i], y: Math.max(v, PISO) })),
       errorBars: s.ber_promedio.map((_, i) => ({
         lo: Math.max(s.ic_inferior[i], PISO), hi: Math.max(s.ic_superior[i], PISO),
