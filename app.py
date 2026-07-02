@@ -372,6 +372,40 @@ def img_a_b64(img: Image.Image, formato: str = "PNG") -> str:
     return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
 
 
+def texto_a_bits(texto: str) -> np.ndarray:
+    """Convierte un texto (UTF-8) en un vector de bits uint8 (MSB primero)."""
+    return np.unpackbits(np.frombuffer(texto.encode("utf-8"), dtype=np.uint8))
+
+
+def bits_a_texto(bits: np.ndarray) -> str:
+    """Reconstruye el texto desde los bits recibidos; los bytes corruptos se ven como �."""
+    return np.packbits(bits).tobytes().decode("utf-8", errors="replace")
+
+
+def _cargar_imagen_defecto():
+    """Carga lena.png como imagen por defecto en ESTADO (si existe junto a app.py)."""
+    ruta = os.path.join(os.path.dirname(__file__), "lena.png")
+    if not os.path.exists(ruta):
+        return
+    try:
+        img = Image.open(ruta)
+        img.load()
+        if img.mode not in ("RGB", "L"):
+            img = img.convert("RGB")
+        bits, modo, size = imagen_a_bits(img)
+        ESTADO["bits"] = bits
+        ESTADO["imagen_mode"] = modo
+        ESTADO["imagen_size"] = size
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        ESTADO["imagen_bytes"] = buf.getvalue()
+    except Exception:
+        pass                                            # Sin imagen por defecto: se sube a mano
+
+
+_cargar_imagen_defecto()
+
+
 # =====================================================================================
 # === [BLOQUE 4] OFDM — NÚCLEO: PILOTOS, MAPEO DE SUBPORTADORAS, IFFT/FFT + CP        ===
 # =====================================================================================
@@ -1454,6 +1488,21 @@ def subir_imagen():
     })
 
 
+@app.route("/imagen_actual", methods=["GET"])
+def imagen_actual():
+    """Devuelve la imagen cargada en ESTADO (la de defecto al arrancar) para inicializar la UI."""
+    if ESTADO["bits"] is None:
+        return jsonify({"hay_imagen": False})
+    return jsonify({
+        "hay_imagen": True,
+        "n_bits": int(len(ESTADO["bits"])),
+        "ancho": ESTADO["imagen_size"][0],
+        "alto": ESTADO["imagen_size"][1],
+        "canales": 3 if ESTADO["imagen_mode"] == "RGB" else 1,
+        "preview_b64": "data:image/png;base64," + base64.b64encode(ESTADO["imagen_bytes"]).decode("ascii"),
+    })
+
+
 @app.route("/calcular_parametros", methods=["POST"])
 def calcular_parametros():
     """Calcula y devuelve los parámetros derivados (N_SC, N_FFT, fs, N_CP, ...) de una configuración."""
@@ -2122,11 +2171,12 @@ def montecarlo_beamforming():
 def simular_mimo():
     """
     Práctica 6 (multiplexación espacial multi-codeword + SIC): ejecuta UNA transmisión de la
-    imagen cargada con N_T señales independientes (perfil PARC: las primeras más robustas) y
-    receptor SIC, en la configuración elegida (2x2 / 3x3 / 4x4). Para evidenciar el beneficio
-    del procesamiento NO lineal ejecuta además la MISMA configuración con receptor LINEAL
-    (sin SIC) sobre los mismos bits. Devuelve la imagen recuperada, la BER total y POR SEÑAL,
-    las constelaciones (lineal vs SIC), el perfil PARC y los tiempos de envío (MIMO vs SISO).
+    fuente elegida (imagen cargada o texto) con N señales independientes (perfil PARC: las
+    primeras más robustas) y receptor SIC, en la configuración simétrica elegida (2x2 / 3x3 /
+    4x4, siempre N_T = N_R). Para evidenciar el beneficio del procesamiento NO lineal ejecuta
+    además la MISMA configuración con receptor LINEAL (sin SIC) sobre los mismos bits.
+    Devuelve la fuente recuperada (imagen o texto), la BER total y POR SEÑAL, las
+    constelaciones (lineal vs SIC), el perfil PARC y los tiempos de envío (MIMO vs SISO).
     """
     data = request.get_json(force=True)
     try:
@@ -2139,17 +2189,26 @@ def simular_mimo():
     except KeyError as e:
         return jsonify({"error": f"Falta campo {e}"}), 400
 
-    CONFIGS = {"2x2": 2, "3x3": 3, "4x4": 4}                          # N_T = N_R = nº de señales
+    CONFIGS = {"2x2": 2, "3x3": 3, "4x4": 4}                          # Simétricas: N_T = N_R
     if modulacion not in ESQUEMAS["OFDM"]["mods"]:                   # El transmisor de la práctica es OFDM
         return jsonify({"error": f"{modulacion} no está disponible en OFDM"}), 400
     if config not in CONFIGS:
         return jsonify({"error": f"Configuración '{config}' no válida (use 2x2, 3x3 o 4x4)"}), 400
-    if ESTADO["bits"] is None:                                       # Debe haber una imagen cargada
-        return jsonify({"error": "Primero suba una imagen"}), 400
+
+    # --- Fuente: imagen cargada o texto escrito (mismo criterio que la Práctica 7) ---
+    fuente = data.get("fuente", "imagen")
+    if fuente == "texto":
+        texto = (data.get("texto") or "").strip()
+        if not texto:
+            return jsonify({"error": "Escriba un texto para transmitir"}), 400
+        bits_tx = texto_a_bits(texto)
+    else:
+        if ESTADO["bits"] is None:                                   # Debe haber una imagen cargada
+            return jsonify({"error": "Primero suba una imagen (o use la fuente de texto)"}), 400
+        bits_tx = ESTADO["bits"]
 
     n_ant = CONFIGS[config]
     bps = MODULACIONES[modulacion]["bits"]
-    bits_tx = ESTADO["bits"]                                         # Bits de la imagen (mismo TX)
     params = calcular_parametros_ofdm(bw, df, cp, len(bits_tx), bps)
 
     rng = np.random.default_rng()
@@ -2168,9 +2227,6 @@ def simular_mimo():
     n_ofdm_siso = math.ceil(len(bits_tx) / (params["n_sc"] * bps))
     tiempo_aire_siso_s = n_ofdm_siso * params["duracion_simbolo_us"] * 1e-6
 
-    img_rx = bits_a_imagen(resultado["bits_rx"], ESTADO["imagen_mode"], ESTADO["imagen_size"])
-    img_tx = Image.open(io.BytesIO(ESTADO["imagen_bytes"]))
-
     def submuestrear(arr, max_n=3000):                              # Limita los puntos enviados al navegador
         if len(arr) > max_n:
             idx = np.random.choice(len(arr), max_n, replace=False)
@@ -2184,6 +2240,7 @@ def simular_mimo():
         "ber_antes": ref["ber"],
         "ber_por_flujo": resultado["ber_por_flujo"],
         "perfil": resultado["perfil"],
+        "fuente": fuente,
         "modulacion": modulacion,
         "config": config,
         "n_tx": n_ant,
@@ -2193,8 +2250,6 @@ def simular_mimo():
         "bits_transmitidos": int(len(bits_tx)),
         "bits_erroneos": int(round(resultado["ber"] * len(bits_tx))),
         "n_simbolos_ofdm": int(resultado["n_simbolos_ofdm"]),
-        "imagen_original_b64": img_a_b64(img_tx),
-        "imagen_recuperada_b64": img_a_b64(img_rx),
         "constelacion_rx": {"real": c_rx.real.tolist(), "imag": c_rx.imag.tolist()},
         "constelacion_rx_antes": {"real": c_antes.real.tolist(), "imag": c_antes.imag.tolist()},
         "parametros": params,
@@ -2202,20 +2257,30 @@ def simular_mimo():
         "tiempo_aire_siso_s": tiempo_aire_siso_s,
         "tiempo_computo_s": tiempo_computo_s,
     }
+    if fuente == "texto":
+        salida["texto_original"] = texto
+        salida["texto_recuperado"] = bits_a_texto(resultado["bits_rx"])       # Tras el SIC
+        salida["texto_recuperado_lineal"] = bits_a_texto(ref["bits_rx"])      # Receptor lineal
+    else:
+        img_rx = bits_a_imagen(resultado["bits_rx"], ESTADO["imagen_mode"], ESTADO["imagen_size"])
+        img_tx = Image.open(io.BytesIO(ESTADO["imagen_bytes"]))
+        salida["imagen_original_b64"] = img_a_b64(img_tx)
+        salida["imagen_recuperada_b64"] = img_a_b64(img_rx)
     return jsonify(salida)
 
 
 @app.route("/montecarlo_mimo", methods=["POST"])
 def montecarlo_mimo():
     """
-    Práctica 6: Monte Carlo de multiplexación espacial. Devuelve DOS resultados:
-      - series_ber: BER vs SNR con el ARRAY RECEPTOR FIJO en 4 antenas y un número
-        CRECIENTE de señales transmitidas (1x4 / 2x4 / 3x4 / 4x4), todas con la MISMA
-        modulación (sin PARC) para AISLAR el efecto interferencia: cada señal TX adicional
-        añade un interferente y consume grados de libertad del receptor → la BER EMPEORA
-        monotónicamente al aumentar las antenas TX (el precio de multiplicar la tasa).
-        Incluye además la curva 4x4 con receptor LINEAL (sin SIC) para evidenciar la
-        ganancia del procesamiento no lineal.
+    Práctica 6: Monte Carlo de multiplexación espacial (solo configuraciones SIMÉTRICAS,
+    N_T = N_R). Devuelve DOS resultados:
+      - series_ber: BER vs SNR para 1x1 / 2x2 / 3x3 / 4x4 con receptor SIC y TODAS las
+        señales con la MISMA modulación (sin PARC), para AISLAR el efecto interferencia:
+        cada señal adicional interfiere a las demás y reparte la potencia (1/√N) → la BER
+        EMPEORA al aumentar el número de antenas (el precio de multiplicar la tasa).
+        Incluye además el par 4x4 CON PARC (robustez diferenciada por señal): SIC vs
+        receptor lineal — con PARC las primeras decisiones del SIC son fiables (diapo 208)
+        y el procesamiento no lineal gana claramente, con ventaja creciente en SNR.
       - series_tiempo: tiempo de envío (aire) de un mismo mensaje de referencia para cada
         configuración: con N señales simultáneas se usan ~N veces menos símbolos OFDM → el
         tiempo se divide por N. Es el BENEFICIO que compensa la interferencia.
@@ -2245,29 +2310,34 @@ def montecarlo_mimo():
     def corrida(funcion):                              # Genera bits nuevos y devuelve la BER de una corrida
         return lambda snr: funcion(rng.integers(0, 2, N_BITS_MC, dtype=np.uint8), snr)
 
-    # --- BER vs SNR: array RX fijo (4 antenas) y 1/2/3/4 señales TX, con SIC ---
+    # --- BER vs SNR: configuraciones simétricas 1x1 / 2x2 / 3x3 / 4x4, con SIC ---
     series_ber = []
-    for nombre, n_tx in [("1x4", 1), ("2x4", 2), ("3x4", 3), ("4x4", 4)]:
-        f = corrida(lambda bits, snr, n=n_tx: cadena_tx_mimo_rx(
-            bits, modulacion, params, snr, rng, n_tx=n, n_rx=4,
+    for nombre, n_ant in [("1x1", 1), ("2x2", 2), ("3x3", 3), ("4x4", 4)]:
+        f = corrida(lambda bits, snr, n=n_ant: cadena_tx_mimo_rx(
+            bits, modulacion, params, snr, rng, n_tx=n, n_rx=n,
             usar_sic=True, usar_parc=False)["ber"])
         ber_prom, ic_inf, ic_sup = _curva_ber_mc(f, snr_valores, n_sim, t_critico)
-        series_ber.append({"config": nombre, "n_senales": n_tx,
+        series_ber.append({"config": nombre, "n_senales": n_ant,
                            "ber_promedio": ber_prom, "ic_inferior": ic_inf, "ic_superior": ic_sup})
 
-    # 4x4 con receptor LINEAL (sin SIC): muestra cuánto aporta el procesamiento no lineal
-    f_lin = corrida(lambda bits, snr: cadena_tx_mimo_rx(
-        bits, modulacion, params, snr, rng, n_tx=4, n_rx=4,
-        usar_sic=False, usar_parc=False)["ber"])
-    lin_prom, lin_inf, lin_sup = _curva_ber_mc(f_lin, snr_valores, n_sim, t_critico)
-    series_ber.append({"config": "4x4-lineal", "n_senales": 4,
-                       "ber_promedio": lin_prom, "ic_inferior": lin_inf, "ic_superior": lin_sup})
+    # Par 4x4 CON PARC: SIC vs lineal. El PARC hace fiables las primeras decisiones del
+    # SIC (diapo 208) y ahí el procesamiento NO LINEAL gana claramente al receptor lineal.
+    for nombre, sic in [("4x4-parc", True), ("4x4-parc-lineal", False)]:
+        f = corrida(lambda bits, snr, s_=sic: cadena_tx_mimo_rx(
+            bits, modulacion, params, snr, rng, n_tx=4, n_rx=4,
+            usar_sic=s_, usar_parc=True)["ber"])
+        ber_prom, ic_inf, ic_sup = _curva_ber_mc(f, snr_valores, n_sim, t_critico)
+        series_ber.append({"config": nombre, "n_senales": 4,
+                           "ber_promedio": ber_prom, "ic_inferior": ic_inf, "ic_superior": ic_sup})
 
     # --- Tiempo de envío (aire) por configuración, para un mismo mensaje de referencia ---
     # Determinista (no requiere Monte Carlo): n_ofdm = ceil(bits / (n_sc·bps·N)) símbolos.
-    n_bits_ref = int(len(ESTADO["bits"])) if ESTADO["bits"] is not None else 1_000_000
+    # El nº de bits de referencia lo decide la fuente activa del panel (imagen o texto).
+    n_bits_ref = int(data.get("n_bits_ref") or 0)
+    if n_bits_ref <= 0:
+        n_bits_ref = int(len(ESTADO["bits"])) if ESTADO["bits"] is not None else 1_000_000
     series_tiempo = []
-    for nombre, n_ant in [("1x4", 1), ("2x4", 2), ("3x4", 3), ("4x4", 4)]:
+    for nombre, n_ant in [("1x1", 1), ("2x2", 2), ("3x3", 3), ("4x4", 4)]:
         bits_uso = params["n_sc"] * bps * n_ant        # Bits por uso de canal (N señales iguales)
         n_ofdm = math.ceil(n_bits_ref / bits_uso)
         t_aire_s = n_ofdm * params["duracion_simbolo_us"] * 1e-6

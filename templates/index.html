@@ -886,7 +886,7 @@
           </select>
         </div>
         <div class="campo">
-          <label class="campo-label" for="mimo-config">Configuración MIMO (N_T × N_R)</label>
+          <label class="campo-label" for="mimo-config">Configuración MIMO (N_T × N_R, simétrica)</label>
           <select id="mimo-config">
             <option value="2x2" selected>2×2 — 2 señales simultáneas</option>
             <option value="3x3">3×3 — 3 señales simultáneas</option>
@@ -922,13 +922,28 @@
       </section>
 
       <section class="tarjeta">
-        <h2>Imagen</h2>
+        <h2>Fuente de datos</h2>
         <div class="campo">
-          <label class="campo-label" for="mimo-archivo-imagen">Subir imagen (.png, .jpg, .bmp)</label>
-          <input type="file" id="mimo-archivo-imagen" accept=".png,.jpg,.jpeg,.bmp" />
+          <label class="campo-label" for="mimo-fuente">Qué transmitir</label>
+          <select id="mimo-fuente">
+            <option value="imagen" selected>Imagen (lena por defecto)</option>
+            <option value="texto">Texto</option>
+          </select>
         </div>
-        <img id="mimo-preview-imagen" class="preview-imagen" alt="Preview" />
-        <div id="mimo-info-imagen" class="estado"></div>
+        <div class="campo" id="mimo-campo-texto" style="display:none">
+          <label class="campo-label" for="mimo-texto">Texto a transmitir</label>
+          <textarea id="mimo-texto" rows="7" style="width:100%; resize:vertical; font-family:inherit; padding:8px; border-radius:8px; border:1px solid #C9D4E0">Lorem ipsum dolor sit amet, consectetur adipiscing elit. Curabitur lobortis augue at lectus malesuada posuere. Donec bibendum lacus mattis, dignissim erat in, pulvinar libero. Donec in finibus arcu. Mauris bibendum, tortor in iaculis iaculis, mauris enim consectetur lorem, vitae laoreet arcu tellus et leo. Quisque sollicitudin magna est, vitae malesuada lacus condimentum bibendum. Aliquam dignissim libero eu euismod gravida. Suspendisse malesuada neque metus, ut mattis lacus porttitor nec. Maecenas sit amet efficitur est. Fusce tempus metus ac lacinia mattis. Ut imperdiet justo at sagittis mollis. Fusce ut suscipit libero. Curabitur malesuada eu nunc sit amet feugiat. Nam eu dictum diam. Nam quam leo, pretium elementum varius quis, volutpat eget ligula. Maecenas id metus vulputate, elementum nunc eu, mollis ex.
+
+Sed eget metus felis. Sed suscipit ultrices sapien. Mauris sit amet efficitur felis, in ullamcorper dolor. Praesent venenatis dolor id faucibus varius. Praesent tincidunt molestie mauris vitae molestie. Nam non justo quis eros pretium luctus. Curabitur congue lorem vitae posuere vulputate. Mauris rhoncus, nisi et sollicitudin faucibus, leo enim pellentesque orci, eget mollis felis magna vel lectus. Duis vel quam eu ligula blandit accumsan laoreet sit amet quam. Nam quis leo ultrices, pretium felis nec, hendrerit lectus. Mauris hendrerit tellus ut massa dapibus, eget ultricies elit placerat.</textarea>
+        </div>
+        <div id="mimo-campo-imagen">
+          <div class="campo">
+            <label class="campo-label" for="mimo-archivo-imagen">Cambiar imagen (.png, .jpg, .bmp)</label>
+            <input type="file" id="mimo-archivo-imagen" accept=".png,.jpg,.jpeg,.bmp" />
+          </div>
+          <img id="mimo-preview-imagen" class="preview-imagen" alt="Preview" />
+          <div id="mimo-info-imagen" class="estado"></div>
+        </div>
       </section>
     </aside>
 
@@ -939,19 +954,19 @@
         <h2>Multiplexación espacial — TX Multi-Codeword + receptor no lineal (SIC)</h2>
         <p class="nota">
           El transmisor envía <strong>N<sub>L</sub> señales completamente independientes a la
-          vez</strong>, una por antena: la tasa se multiplica por N<sub>L</sub> y el
-          <strong>tiempo de envío se divide</strong>. El precio: cada antena RX recibe la
-          <strong>suma de todas las señales</strong> — se <strong>interfieren mutuamente</strong>, y a más
-          antenas, más interferencia. En el <strong>TX multi-codeword</strong> cada señal tiene su
-          propio bloque de <em>coding &amp; modulation</em>, lo que permite darles <strong>distinta
-          robustez (PARC)</strong>: la primera señal en decodificarse (máxima interferencia) usa la
-          modulación más robusta. El receptor aplica <strong>SIC</strong> (procesamiento
+          vez</strong>, una por antena (siempre con <strong>N<sub>T</sub> = N<sub>R</sub></strong>):
+          la tasa se multiplica por N<sub>L</sub> y el <strong>tiempo de envío se divide</strong>. El precio:
+          cada antena RX recibe la <strong>suma de todas las señales</strong> — se <strong>interfieren
+          mutuamente</strong>, y a más antenas, más interferencia. En el <strong>TX multi-codeword</strong>
+          cada señal tiene su propio bloque de <em>coding &amp; modulation</em>, lo que permite darles
+          <strong>distinta robustez (PARC)</strong>: la primera señal en decodificarse (máxima interferencia)
+          usa la modulación más robusta. El receptor aplica <strong>SIC</strong> (procesamiento
           <strong>no lineal</strong>): demodula y decodifica la 1ª señal, la <strong>re-codifica</strong>
           y la <strong>resta</strong> de lo recibido; la 2ª se decodifica con SIR mejorada… y así
           sucesivamente hasta la señal N<sub>L</sub>.
         </p>
         <div class="diagrama">
-          <div class="bloque">Imagen<br>→ Bits</div>
+          <div class="bloque">Fuente<br>→ Bits</div>
           <span class="flecha">→</span>
           <div class="bloque">Demux<br>N_L señales</div>
           <span class="flecha">→</span>
@@ -965,7 +980,7 @@
           <span class="flecha">→</span>
           <div class="bloque resaltado">SIC: detectar →<br>decod → restar (×N_L)</div>
           <span class="flecha">→</span>
-          <div class="bloque">Remux<br>→ Imagen</div>
+          <div class="bloque">Remux<br>→ Fuente</div>
         </div>
         <div class="estado" style="margin-top:8px">
           Bloques resaltados = modulación independiente por señal (TX multi-codeword, diap. 204) y cancelación sucesiva de interferencia (SIC, diap. 206-207).
@@ -986,13 +1001,36 @@
         <div id="mimo-kv-params" class="kv-grid"></div>
       </section>
 
+      <!-- Esquema de multiplexación: qué señal viaja por cada antena y subportadora -->
+      <section class="tarjeta">
+        <h2>Esquema de multiplexación — señal por antena × subportadora OFDM</h2>
+        <canvas id="mimo-mapa-sf-canvas" class="mapa-sc-canvas" width="1200" height="170"></canvas>
+        <div class="estado" id="mimo-resumen-sf" style="margin-top:8px"></div>
+      </section>
+
       <div id="mimo-zona-resultados" style="display:none">
         <div class="grid-resultados">
           <section class="tarjeta">
-            <h3>Imágenes TX / RX</h3>
-            <div class="img-comparativa">
-              <figure><img id="mimo-img-tx" alt="Original" /><figcaption>Original</figcaption></figure>
-              <figure><img id="mimo-img-rx" alt="Recuperada" /><figcaption>Recuperada (SIC)</figcaption></figure>
+            <h3 id="mimo-titulo-fuente">Imágenes TX / RX</h3>
+            <div id="mimo-res-imagen">
+              <div class="img-comparativa">
+                <figure><img id="mimo-img-tx" alt="Original" /><figcaption>Original</figcaption></figure>
+                <figure><img id="mimo-img-rx" alt="Recuperada" /><figcaption>Recuperada (SIC)</figcaption></figure>
+              </div>
+            </div>
+            <div id="mimo-res-texto" style="display:none">
+              <div class="campo">
+                <label class="campo-label">Texto original</label>
+                <div class="estado" id="mimo-texto-tx" style="white-space:pre-wrap; text-align:left"></div>
+              </div>
+              <div class="campo">
+                <label class="campo-label">Recuperado con SIC (no lineal)</label>
+                <div class="estado ok" id="mimo-texto-rx" style="white-space:pre-wrap; text-align:left"></div>
+              </div>
+              <div class="campo">
+                <label class="campo-label">Recuperado con receptor lineal (comparación)</label>
+                <div class="estado" id="mimo-texto-rx-lineal" style="white-space:pre-wrap; text-align:left"></div>
+              </div>
             </div>
             <div class="ber-grande">
               <div class="lbl">BER</div>
@@ -1342,16 +1380,17 @@
 
         <div id="mimo-mc-vista-ber">
           <div class="estado" style="margin-bottom:10px">
-            El <strong>array receptor se fija en 4 antenas</strong> y se aumenta el número de señales
-            transmitidas (1×4 → 2×4 → 3×4 → 4×4), todas con la <strong>misma modulación</strong> (sin PARC) para
-            aislar el efecto de la interferencia: <strong>cada señal TX adicional añade un interferente</strong>,
-            consume grados de libertad del receptor y reparte la potencia (1/√N) → la <strong>BER empeora al
-            aumentar las antenas TX</strong>. Ese es el precio de multiplicar la tasa. La curva
-            <strong>4×4 lineal (sin SIC)</strong> muestra cuánto aporta el procesamiento <strong>no lineal</strong>:
-            el SIC cancela la interferencia por etapas y queda por debajo del receptor lineal.
-            Bandas = IC 95% (t-Student).
+            Se comparan configuraciones <strong>simétricas</strong> (N<sub>T</sub> = N<sub>R</sub>):
+            1×1 → 2×2 → 3×3 → 4×4, todas las señales con la <strong>misma modulación</strong> (sin PARC) para
+            aislar el efecto de la interferencia: <strong>cada señal adicional interfiere a las demás</strong> y
+            reparte la potencia transmitida (1/√N) → la <strong>BER empeora al aumentar el número de
+            antenas</strong>. Ese es el precio de multiplicar la tasa. El par
+            <strong>morado (4×4 con PARC)</strong> muestra cuánto aporta el procesamiento <strong>no
+            lineal</strong>: con robustez diferenciada las primeras decisiones del SIC son fiables y la curva
+            <strong>PARC + SIC</strong> (sólida) queda claramente por debajo de <strong>PARC lineal</strong>
+            (discontinua), con una ganancia que crece con la SNR. Bandas = IC 95% (t-Student).
           </div>
-          <h3 style="margin:0 0 8px 0">BER vs SNR — 1×4 / 2×4 / 3×4 / 4×4 (SIC) + 4×4 lineal</h3>
+          <h3 style="margin:0 0 8px 0">BER vs SNR — 1×1 / 2×2 / 3×3 / 4×4 (SIC) + par PARC (SIC vs lineal)</h3>
           <canvas id="mimo-montecarlo-canvas"></canvas>
         </div>
 

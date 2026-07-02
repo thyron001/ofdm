@@ -1549,13 +1549,15 @@ function crearPanelBeamforming() {
 // =====================================================================
 // Panel propio (espejo de crearPanelBeamforming). El TX envía N_L señales INDEPENDIENTES
 // simultáneas (multi-codeword: modulación propia por señal, PARC) y el RX aplica SIC
-// (detectar → decodificar → re-codificar → restar). Color = configuración; la curva
-// "4x4-lineal" (sin SIC) va discontinua para evidenciar el procesamiento no lineal.
-const COLORES_MIMO = { '1x4': '#888888', '2x4': '#18A34B', '3x4': '#1E54E0', '4x4': '#D82A2A', '4x4-lineal': '#D82A2A' };
+// (detectar → decodificar → re-codificar → restar). Solo configuraciones SIMÉTRICAS
+// (N_T = N_R). Fuente de datos: imagen (lena por defecto) o texto. Color = configuración;
+// el par PARC (morado) compara SIC vs lineal para evidenciar el procesamiento no lineal.
+const COLORES_MIMO = { '1x1': '#888888', '2x2': '#18A34B', '3x3': '#1E54E0', '4x4': '#D82A2A',
+                       '4x4-parc': '#7A28C7', '4x4-parc-lineal': '#7A28C7' };
 const ETIQUETAS_MIMO = {
-  '1x4': '1×4 — 1 señal (sin interferencia)', '2x4': '2×4 SIC — 2 señales',
-  '3x4': '3×4 SIC — 3 señales', '4x4': '4×4 SIC — 4 señales',
-  '4x4-lineal': '4×4 lineal (sin SIC)',
+  '1x1': '1×1 — 1 señal (sin interferencia)', '2x2': '2×2 SIC — 2 señales',
+  '3x3': '3×3 SIC — 3 señales', '4x4': '4×4 SIC — 4 señales',
+  '4x4-parc': '4×4 PARC + SIC', '4x4-parc-lineal': '4×4 PARC lineal (sin SIC)',
 };
 const ORDEN_MODS_PARC = ['QPSK', '16-QAM', '64-QAM'];
 
@@ -1569,7 +1571,23 @@ function perfilPARC(modulacion, nSenales) {
 
 function crearPanelMIMO() {
   const $ = (id) => document.getElementById(id);
-  const estado = { imagenSubida: false, nBits: 0, graficoMC: null, graficoTiempo: null };
+  const estado = { imagenSubida: false, nBitsImagen: 0, graficoMC: null, graficoTiempo: null };
+
+  // ---------- Fuente de datos (imagen por defecto / texto) ----------
+  function bitsDeTexto() {
+    return new TextEncoder().encode($('mimo-texto').value || '').length * 8;
+  }
+  function nBitsFuente() {
+    return $('mimo-fuente').value === 'texto' ? bitsDeTexto() : estado.nBitsImagen;
+  }
+  function actualizarFuente() {
+    const esTexto = $('mimo-fuente').value === 'texto';
+    $('mimo-campo-texto').style.display = esTexto ? '' : 'none';
+    $('mimo-campo-imagen').style.display = esTexto ? 'none' : '';
+    $('mimo-btn-simular').disabled = esTexto ? !($('mimo-texto').value || '').trim()
+                                             : !estado.imagenSubida;
+    actualizarParametros();
+  }
 
   // ---------- Parámetros ----------
   function validarCombinacion() {
@@ -1604,7 +1622,7 @@ function crearPanelMIMO() {
       delta_f_khz: parseFloat($('mimo-df').value),
       tipo_cp: $('mimo-cp').value,
       modulacion: $('mimo-modulacion').value,
-      n_bits: estado.nBits,
+      n_bits: nBitsFuente(),
     };
     try {
       const r = await fetch('/calcular_parametros', {
@@ -1617,12 +1635,14 @@ function crearPanelMIMO() {
         return;
       }
       renderKV(j);
+      dibujarMapaSF(j.n_sc);
     } catch (e) { console.error(e); }
   }
   function renderKV(p, extras = {}) {
     const cfg = $('mimo-config').value || '2x2';
     const n = parseInt(cfg.split('x')[0]);
     const perfil = perfilPARC($('mimo-modulacion').value, n);
+    const esTexto = $('mimo-fuente').value === 'texto';
     const items = [
       ['Subportadoras útiles (N_SC)', p.n_sc],
       ['Tamaño de la FFT (N_FFT)', p.n_fft],
@@ -1631,7 +1651,7 @@ function crearPanelMIMO() {
       ['Antenas (N_T × N_R)', cfg.replace('x', ' × ')],
       ['Señales simultáneas (N_L)', n],
       ['Perfil PARC (S1 → S' + n + ')', perfil.join(' / ')],
-      ['Bits totales de la imagen', (estado.nBits || 0).toLocaleString()],
+      [esTexto ? 'Bits totales del texto' : 'Bits totales de la imagen', (nBitsFuente() || 0).toLocaleString()],
     ];
     if (extras.tiempo_aire_s != null) {
       items.push(['Tiempo de envío MIMO (aire)', formatearTiempo(extras.tiempo_aire_s)]);
@@ -1647,6 +1667,42 @@ function crearPanelMIMO() {
       'Multiplexación espacial multi-codeword: N_L señales independientes simultáneas (reparto de potencia 1/√N_T, sin pilotos), ' +
       'PARC: la 1ª señal decodificada (más interferida) usa la modulación más robusta. Receptor SIC no lineal.' +
       '</div></div>';
+  }
+
+  // ---------- Esquema de multiplexación: señal por antena × subportadora ----------
+  // Cada FILA es una antena TX (una señal independiente, con su modulación PARC) y cada
+  // COLUMNA una subportadora OFDM: todas las señales usan TODAS las subportadoras A LA VEZ
+  // (se separan en el ESPACIO, no en frecuencia — eso es la multiplexación espacial).
+  function dibujarMapaSF(nSc) {
+    const cv = $('mimo-mapa-sf-canvas');
+    const ctx = cv.getContext('2d');
+    const W = cv.clientWidth || 1200;
+    const n = parseInt(($('mimo-config').value || '2x2').split('x')[0]);
+    const perfil = perfilPARC($('mimo-modulacion').value, n);
+    const filaH = 28, gap = 6, topo = 8;
+    cv.width = W; cv.height = topo + n * (filaH + gap) + 30;
+    ctx.clearRect(0, 0, cv.width, cv.height);
+    const etiqW = 150;                                   // Ancho reservado a la etiqueta de fila
+    const celdas = Math.min(nSc, 150);                   // Celdas dibujadas (representan las N_SC)
+    const anchoCelda = (W - etiqW - 10) / celdas;
+    for (let i = 0; i < n; i++) {
+      const y = topo + i * (filaH + gap);
+      ctx.fillStyle = '#0B2540'; ctx.font = 'bold 12px Nunito'; ctx.textAlign = 'left';
+      ctx.fillText(`Antena ${i + 1} → Señal S${i + 1} (${perfil[i]})`, 4, y + filaH / 2 + 4);
+      ctx.fillStyle = COLORES_MOD[perfil[i]] || '#1E54E0';
+      for (let k = 0; k < celdas; k++) {
+        ctx.globalAlpha = 0.55 + 0.45 * ((k + i) % 2);   // Tablero suave: se ven las subportadoras
+        ctx.fillRect(etiqW + k * anchoCelda, y, Math.max(anchoCelda - 0.6, 1), filaH);
+      }
+      ctx.globalAlpha = 1;
+    }
+    ctx.fillStyle = '#5B6B7E'; ctx.font = 'bold 11px Nunito'; ctx.textAlign = 'center';
+    ctx.fillText(`subportadoras OFDM (1 … ${nSc}) — todas las antenas transmiten en las mismas subportadoras al mismo tiempo`,
+                 etiqW + (W - etiqW) / 2, cv.height - 8);
+    $('mimo-resumen-sf').textContent =
+      `${n} señales independientes × ${nSc} subportadoras por uso de canal: la separación no es en frecuencia ni en tiempo, ` +
+      `sino ESPACIAL (el detector SIC separa las señales usando la matriz de canal H[k] de cada subportadora). ` +
+      `Color = modulación PARC de cada señal.`;
   }
 
   // ---------- SNR slider ----------
@@ -1677,7 +1733,7 @@ function crearPanelMIMO() {
   }
   function notificarImagen(info) {
     estado.imagenSubida = true;
-    estado.nBits = info.n_bits;
+    estado.nBitsImagen = info.n_bits;
     if (info.preview_b64) {
       $('mimo-preview-imagen').src = info.preview_b64;
       $('mimo-preview-imagen').style.display = 'block';
@@ -1685,7 +1741,7 @@ function crearPanelMIMO() {
     $('mimo-info-imagen').className = 'estado ok';
     $('mimo-info-imagen').textContent =
       `${info.ancho}×${info.alto}, ${info.canales} canal(es), ${info.n_bits.toLocaleString()} bits ✓`;
-    $('mimo-btn-simular').disabled = false;
+    if ($('mimo-fuente').value === 'imagen') $('mimo-btn-simular').disabled = false;
     actualizarParametros();
   }
 
@@ -1707,9 +1763,11 @@ function crearPanelMIMO() {
     }
   }
 
-  // ---------- Simulación única (imagen + BER por señal + lineal vs SIC) ----------
+  // ---------- Simulación única (fuente + BER por señal + lineal vs SIC) ----------
   async function ejecutarSimulacion() {
-    if (!estado.imagenSubida) { alert('Sube una imagen primero'); return; }
+    const fuente = $('mimo-fuente').value;
+    if (fuente === 'imagen' && !estado.imagenSubida) { alert('Sube una imagen o cambia la fuente a Texto'); return; }
+    if (fuente === 'texto' && !($('mimo-texto').value || '').trim()) { alert('Escribe un texto para transmitir'); return; }
     $('mimo-btn-simular').disabled = true;
     $('mimo-btn-simular').innerHTML = '<span class="spinner"></span> Simulando...';
     $('mimo-estado-sim').textContent = 'Ejecutando TX multi-codeword (N_L señales) → canal MIMO → SIC...';
@@ -1721,6 +1779,8 @@ function crearPanelMIMO() {
       snr_db: parseFloat($('mimo-snr').value),
       modulacion: $('mimo-modulacion').value,
       config: $('mimo-config').value,
+      fuente: fuente,
+      texto: $('mimo-texto').value,
     };
     try {
       const r = await fetch('/simular_mimo', {
@@ -1742,8 +1802,20 @@ function crearPanelMIMO() {
   }
   function pintarResultados(j) {
     $('mimo-zona-resultados').style.display = 'block';
-    $('mimo-img-tx').src = j.imagen_original_b64;
-    $('mimo-img-rx').src = j.imagen_recuperada_b64;
+    if (j.fuente === 'texto') {
+      $('mimo-titulo-fuente').textContent = 'Texto TX / RX';
+      $('mimo-res-imagen').style.display = 'none';
+      $('mimo-res-texto').style.display = 'block';
+      $('mimo-texto-tx').textContent = j.texto_original || '';
+      $('mimo-texto-rx').textContent = j.texto_recuperado || '';
+      $('mimo-texto-rx-lineal').textContent = j.texto_recuperado_lineal || '';
+    } else {
+      $('mimo-titulo-fuente').textContent = 'Imágenes TX / RX';
+      $('mimo-res-imagen').style.display = 'block';
+      $('mimo-res-texto').style.display = 'none';
+      $('mimo-img-tx').src = j.imagen_original_b64;
+      $('mimo-img-rx').src = j.imagen_recuperada_b64;
+    }
     $('mimo-ber-valor').textContent = (j.ber * 100).toFixed(3) + ' %';
     const configTxt = (j.config || '').replace('x', '×');
     $('mimo-ber-detalle').textContent =
@@ -1765,19 +1837,21 @@ function crearPanelMIMO() {
       `Derecha: SIC — cada señal se decodifica, se re-codifica y se resta; las siguientes ven menos interferencia (nube más limpia). ` +
       `Ambas superponen las constelaciones del perfil ${j.perfil.join('+')}.`;
     renderKV(j.parametros, { tiempo_aire_s: j.tiempo_aire_s, tiempo_aire_siso_s: j.tiempo_aire_siso_s });
+    dibujarMapaSF(j.parametros.n_sc);
   }
 
   // ---------- Monte Carlo (BER interferencia + tiempos de envío) ----------
   async function ejecutarMontecarlo() {
     $('mimo-btn-mc').disabled = true;
     $('mimo-btn-mc').innerHTML = '<span class="spinner"></span> Ejecutando Monte Carlo...';
-    $('mimo-estado-sim').textContent = 'Monte Carlo: 1/2/3/4 señales sobre 4 antenas RX (SIC) + 4×4 lineal × 16 SNR × 8 corridas (puede tardar)...';
+    $('mimo-estado-sim').textContent = 'Monte Carlo: 1×1/2×2/3×3/4×4 (SIC) + par PARC (SIC vs lineal) × 16 SNR × 8 corridas (puede tardar)...';
     $('mimo-estado-sim').className = 'estado';
     const payload = {
       bw_mhz: parseFloat($('mimo-bw').value),
       delta_f_khz: parseFloat($('mimo-df').value),
       tipo_cp: $('mimo-cp').value,
       modulacion: $('mimo-modulacion').value,
+      n_bits_ref: nBitsFuente(),
     };
     try {
       const r = await fetch('/montecarlo_mimo', {
@@ -1885,7 +1959,7 @@ function crearPanelMIMO() {
     if (estado.graficoMC) estado.graficoMC.destroy();
     if (estado.graficoTiempo) estado.graficoTiempo.destroy();
     estado.graficoMC = construirGraficoBER('mimo-montecarlo-canvas', j.series_ber,
-      'Array RX fijo (4 ant.): cada señal TX adicional ⇒ más interferencia ⇒ peor BER');
+      'Más antenas ⇒ más señales interfiriéndose ⇒ peor BER · PARC+SIC vs lineal (morado)');
     $('mimo-titulo-tiempo').textContent =
       `Tiempo de envío de ${j.n_bits_ref.toLocaleString()} bits vs configuración — ${j.modulacion}`;
     estado.graficoTiempo = construirGraficoTiempo('mimo-tiempo-canvas', j.series_tiempo,
@@ -1917,6 +1991,13 @@ function crearPanelMIMO() {
     $('mimo-cp').addEventListener('change', actualizarParametros);
     $('mimo-modulacion').addEventListener('change', actualizarParametros);
     $('mimo-config').addEventListener('change', actualizarParametros);
+    $('mimo-fuente').addEventListener('change', actualizarFuente);
+    $('mimo-texto').addEventListener('input', () => {
+      if ($('mimo-fuente').value === 'texto') {
+        $('mimo-btn-simular').disabled = !($('mimo-texto').value || '').trim();
+        actualizarParametros();
+      }
+    });
     $('mimo-archivo-imagen').addEventListener('change', subirImagen);
     $('mimo-btn-simular').addEventListener('click', ejecutarSimulacion);
     $('mimo-btn-mc').addEventListener('click', ejecutarMontecarlo);
@@ -1934,7 +2015,7 @@ function crearPanelMIMO() {
     $('mimo-modal-mc').addEventListener('click', (ev) => {
       if (ev.target.id === 'mimo-modal-mc') $('mimo-modal-mc').style.display = 'none';
     });
-    actualizarParametros();
+    actualizarFuente();
     $('mimo-btn-simular').disabled = true;
   }
 
@@ -2343,6 +2424,11 @@ window.addEventListener('DOMContentLoaded', () => {
   panelCodif.bind();
   initTabs();
   initLightbox();
+
+  // Imagen por defecto (lena): el backend la carga al arrancar; se difunde a todas las pestañas
+  fetch('/imagen_actual').then((r) => r.json()).then((info) => {
+    if (info.hay_imagen) broadcastImagen(info);
+  }).catch(() => {});
 
   // Cerrar overlays con Escape
   document.addEventListener('keydown', (ev) => {
