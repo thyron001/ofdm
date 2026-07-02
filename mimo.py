@@ -6,11 +6,21 @@
  contiene las funciones de la cadena, ordenadas en el orden en que ocurren los pasos:
  TRANSMISIÓN, CANAL y RECEPCIÓN.
 
- MULTIPLEXACIÓN ESPACIAL (Cap. 5, pág. 181-208): con N_T antenas TX y N_R antenas RX se
- transmiten N_L = min(N_T, N_R) SEÑALES COMPLETAMENTE INDEPENDIENTES a la vez, una por
- antena. La tasa se multiplica por N_L (el tiempo de envío se divide), PERO las señales
- se INTERFIEREN mutuamente en el aire: cada antena RX recibe la SUMA de las N_T señales.
- Cuantas más antenas, más interferencia entre señales.
+ MULTIPLEXACIÓN ESPACIAL (Cap. 5, pág. 181-208). El sistema usa configuraciones
+ SIMÉTRICAS: N antenas transmisoras y N antenas receptoras (N_T = N_R = N), y transmite
+ N SEÑALES COMPLETAMENTE INDEPENDIENTES a la vez, una por antena. La fuente de bits
+ puede ser una imagen (lena por defecto) o un texto: los MISMOS bits de la fuente se
+ reparten entre las N señales.
+
+ EL ESQUEMA DE MULTIPLEXACIÓN ES POR ANTENA Y POR SUBPORTADORA (OFDM):
+   · Cada ANTENA lleva una señal distinta (eje espacial).
+   · Cada señal ocupa TODAS las N_SC subportadoras de su símbolo OFDM (eje frecuencia).
+   · Es decir, en la subportadora k viajan N símbolos QAM A LA VEZ (uno por antena): las
+     señales NO se separan en frecuencia ni en tiempo, se separan en el ESPACIO usando
+     la matriz de canal H[k] de esa subportadora.
+ Por eso cada uso de canal transporta N·N_SC símbolos → la tasa se multiplica por N y el
+ TIEMPO DE ENVÍO de la fuente se divide ≈ N. El precio: cada antena RX recibe la SUMA de
+ las N señales → se INTERFIEREN mutuamente, y a más antenas, más interferencia.
 
  TX MULTI-CODEWORD (diapositiva 204): cada señal pasa por su PROPIO bloque de
  "Coding & modulation" ANTES del mapeo a antenas. Eso permite dar DIFERENTE ROBUSTEZ a
@@ -27,18 +37,21 @@
      2. La RE-CODIFICA (re-encoding: decisión dura → símbolos limpios) y la RESTA
         de lo recibido por todas las antenas.
      3. La 2ª señal se decodifica ya SIN la interferencia de la 1ª (SIR mejorada),
-        se re-codifica y se resta… y así sucesivamente hasta la señal N_L.
+        se re-codifica y se resta… y así sucesivamente hasta la señal N.
+ Si una decisión es errónea, la resta introduce error (propagación de errores): otra
+ razón para dar más robustez a las primeras señales (PARC y SIC van juntos).
 
  Modelo por subportadora (fading plano en cada subportadora OFDM):
         r̄[k] = H[k] · s̄[k] + n̄[k]
- con s̄[k] los N_T símbolos simultáneos, H[k] la matriz N_R × N_T y r̄[k] lo recibido.
- Cada antena TX se escala por 1/√N_T (potencia total constante).
+ con s̄[k] los N símbolos simultáneos de la subportadora k, H[k] la matriz N × N de
+ canales Rayleigh independientes y r̄[k] lo recibido por las N antenas. Cada antena TX
+ se escala por 1/√N (potencia total radiada constante).
 
  Flujo:
-   bits → demux en N_L señales → [modulación QAM POR SEÑAL, PARC] → mapeo a antenas
-        → N_T×(IFFT+CP) → [canal MIMO H + ruido] → FFT ×N_R
-        → SIC: {detectar MMSE → decodificar → re-codificar → restar} ×N_L
-        → remux de bits → imagen
+   fuente (imagen/texto) → bits → demux en N señales → [modulación QAM POR SEÑAL, PARC]
+        → mapeo a antenas (×1/√N) → N×(IFFT+CP) → [canal MIMO H + ruido] → FFT ×N
+        → SIC: {detectar MMSE → decodificar → re-codificar → restar} ×N
+        → remux de bits → fuente recuperada
 =====================================================================================
 """
 
@@ -48,6 +61,16 @@ import numpy as np
 # =====================================================================================
 # ||                                TRANSMISIÓN                                       ||
 # =====================================================================================
+
+# _____________________________________________________________________________________
+#  FUENTE DE DATOS → BITS                                                    Transmisión
+#  La fuente puede ser una imagen (sus píxeles se desempaquetan a bits, igual que en las
+#  prácticas anteriores) o un TEXTO: cada carácter UTF-8 se convierte en su byte y cada
+#  byte en 8 bits (MSB primero). Aquí se muestra la de texto; la de imagen vive en app.py.
+# _____________________________________________________________________________________
+def texto_a_bits(texto):
+    return np.unpackbits(np.frombuffer(texto.encode("utf-8"), dtype=np.uint8))
+
 
 # _____________________________________________________________________________________
 #  MAPEO QPSK                                                                Transmisión
@@ -93,11 +116,11 @@ def mapear_64qam(bits):
 
 # _____________________________________________________________________________________
 #  PERFIL PARC (Per-Antenna Rate Control)                                    Transmisión
-#  Entra la modulación "objetivo" (la de la señal MENOS interferida) y el nº de señales,
-#  y sale la lista de modulaciones por señal, EN EL ORDEN EN QUE SE DECODIFICAN:
-#     · señal 0 (se decodifica PRIMERO, sufre interferencia de todas las demás)
+#  Entra la modulación "objetivo" (la de la señal MENOS interferida) y el nº de señales
+#  N, y sale la lista de modulaciones por señal, EN EL ORDEN EN QUE SE DECODIFICAN:
+#     · señal 0 (se decodifica PRIMERO, sufre interferencia de las otras N-1)
 #       → modulación más ROBUSTA (escalera descendente hacia QPSK).
-#     · señal N_L-1 (se decodifica ÚLTIMA, ya casi sin interferencia gracias al SIC)
+#     · señal N-1 (se decodifica ÚLTIMA, ya casi sin interferencia gracias al SIC)
 #       → la modulación seleccionada (la más agresiva del perfil).
 #  Ej.: perfil_parc("64-QAM", 4) → ['QPSK', 'QPSK', '16-QAM', '64-QAM']
 # _____________________________________________________________________________________
@@ -109,11 +132,11 @@ def perfil_parc(modulacion, n_senales):
 
 
 # _____________________________________________________________________________________
-#  DEMULTIPLEXAR LOS BITS EN N_L SEÑALES (diapo 205)                         Transmisión
-#  Entra el bloque de bits de UN uso de canal y sale una lista con los bits de cada
-#  señal: la señal i (con bps_i bits/símbolo) toma n_sc·bps_i bits consecutivos. Los
-#  datos se originan en la MISMA fuente (la imagen) y se demultiplexan en señales
-#  distintas ANTES de la modulación de cada una (TX multi-codeword).
+#  DEMULTIPLEXAR LOS BITS EN N SEÑALES (diapo 205)                           Transmisión
+#  Entra el bloque de bits de UN uso de canal (n_sc·Σbps bits) y sale una lista con los
+#  bits de cada señal: la señal i (con bps_i bits/símbolo) toma n_sc·bps_i bits
+#  consecutivos. Los datos se originan en la MISMA fuente (la imagen o el texto) y se
+#  demultiplexan en señales distintas ANTES de la modulación (TX multi-codeword).
 # _____________________________________________________________________________________
 def demux_bits(bits_uso, n_sc, perfil):
     flujos, pos = [], 0
@@ -126,10 +149,12 @@ def demux_bits(bits_uso, n_sc, perfil):
 
 # _____________________________________________________________________________________
 #  "CODING & MODULATION" POR SEÑAL (EL PASO CLAVE DEL TX, diapo 204)         Transmisión
-#  Entran los bits de cada señal y su perfil PARC, y sale la matriz S (N_T × N_SC): cada
-#  fila es una señal INDEPENDIENTE modulada con SU PROPIA modulación (multi-codeword).
-#  A diferencia de SFBC (P4), aquí las antenas NO llevan versiones redundantes: cada
-#  una transporta datos distintos → la tasa total se multiplica por N_L.
+#  Entran los bits de cada señal y su perfil PARC, y sale la matriz S (N × N_SC): la
+#  FILA i es la señal i (una por ANTENA) y la COLUMNA k su símbolo en la SUBPORTADORA k.
+#  Esta matriz ES el esquema de multiplexación espacial por antena y por subportadora:
+#  todas las señales ocupan todas las subportadoras al mismo tiempo. Cada señal es
+#  INDEPENDIENTE y se modula con SU PROPIA modulación (multi-codeword) — a diferencia de
+#  SFBC (P4), las antenas NO llevan versiones redundantes: la tasa se multiplica por N.
 # _____________________________________________________________________________________
 def modular_senales(flujos_bits, perfil, n_sc):
     S = np.zeros((len(perfil), n_sc), dtype=complex)
@@ -140,13 +165,13 @@ def modular_senales(flujos_bits, perfil, n_sc):
 
 # _____________________________________________________________________________________
 #  MAPEO A ANTENAS ("Mapping to antennas", diapo 204)                        Transmisión
-#  Entra la matriz de señales S y sale X = S/√N_T: la señal i se asigna a la antena i,
-#  con reparto de potencia 1/√N_T para que la potencia TOTAL radiada sea constante
-#  (la misma que un SISO a plena potencia). Este reparto cuesta ~10·log10(N_T) dB por
-#  señal: parte del precio de multiplicar la tasa.
+#  Entra la matriz de señales S y sale X = S/√N: la señal i se asigna a la antena i, con
+#  reparto de potencia 1/√N para que la potencia TOTAL radiada sea constante (la misma
+#  que un SISO a plena potencia). Este reparto cuesta ~10·log10(N) dB por señal: parte
+#  del precio de multiplicar la tasa.
 # _____________________________________________________________________________________
-def mapear_a_antenas(S, n_tx):
-    return S / np.sqrt(n_tx)
+def mapear_a_antenas(S, n_ant):
+    return S / np.sqrt(n_ant)
 
 
 # _____________________________________________________________________________________
@@ -168,7 +193,8 @@ def mapeo_sc_a_fft(rejilla_sc, n_fft):
 # _____________________________________________________________________________________
 #  MODULACIÓN OFDM (IFFT + PREFIJO CÍCLICO)                                  Transmisión
 #  Entra la rejilla de una antena y sale su señal OFDM en el tiempo con el prefijo
-#  cíclico (CP), junto con los índices FFT usados. (Se aplica a cada antena por separado.)
+#  cíclico (CP), junto con los índices FFT usados. (Se aplica a cada antena por separado:
+#  N antenas → N moduladores OFDM en paralelo, uno por señal.)
 # _____________________________________________________________________________________
 def modulacion_ofdm(rejilla_sc, n_fft, n_cp):
     vec_freq, indices_fft = mapeo_sc_a_fft(rejilla_sc, n_fft)
@@ -205,17 +231,17 @@ def generar_canal_pedestrian_a(n_fft, fs, indices_fft, rng):
 
 
 # _____________________________________________________________________________________
-#  MATRIZ DE CANAL MIMO H[k] (N_R × N_T por subportadora)                          Canal
-#  Genera un enlace Pedestrian A INDEPENDIENTE por cada par (antena RX, antena TX): la
-#  baja correlación entre enlaces es la condición para poder separar las señales
-#  (pág. 181). Devuelve un tensor H de forma (N_R, N_T, N_SC): para la subportadora k,
-#  H[:, :, k] es la matriz del modelo r̄[k] = H[k]·s̄[k] + n̄[k].
+#  MATRIZ DE CANAL MIMO H[k] (N × N por subportadora)                              Canal
+#  Genera un enlace Pedestrian A INDEPENDIENTE por cada par (antena RX, antena TX): N²
+#  enlaces en total. La baja correlación entre enlaces es la condición para poder separar
+#  las señales (pág. 181). Devuelve un tensor H de forma (N, N, N_SC): para la
+#  subportadora k, H[:, :, k] es la matriz del modelo r̄[k] = H[k]·s̄[k] + n̄[k].
 # _____________________________________________________________________________________
-def generar_canal_mimo(n_fft, fs, indices_fft, rng, n_tx, n_rx):
+def generar_canal_mimo(n_fft, fs, indices_fft, rng, n_ant):
     n_sc = len(indices_fft)
-    H = np.zeros((n_rx, n_tx, n_sc), dtype=complex)
-    for r in range(n_rx):
-        for t in range(n_tx):
+    H = np.zeros((n_ant, n_ant, n_sc), dtype=complex)
+    for r in range(n_ant):
+        for t in range(n_ant):
             H[r, t] = generar_canal_pedestrian_a(n_fft, fs, indices_fft, rng)
     return H
 
@@ -238,8 +264,9 @@ def agregar_ruido_awgn(senal, snr_db, rng):
 
 # _____________________________________________________________________________________
 #  DEMODULACIÓN OFDM (QUITAR CP + FFT)                                        Recepción
-#  Entra la señal recibida por UNA antena (la SUMA de las N_T señales TX, cada una por su
-#  canal — ahí está la interferencia) y salen sus n_sc subportadoras.
+#  Entra la señal recibida por UNA antena — que es la SUMA de las N señales TX, cada una
+#  a través de su propio canal: AHÍ está la interferencia entre señales — y salen sus
+#  n_sc subportadoras. (Se aplica a cada una de las N antenas RX.)
 # _____________________________________________________________________________________
 def demodulacion_ofdm(simbolo_con_cp, indices_fft, n_fft, n_cp, n_sc):
     sin_cp = simbolo_con_cp[n_cp:n_cp + n_fft]
@@ -249,44 +276,45 @@ def demodulacion_ofdm(simbolo_con_cp, indices_fft, n_fft, n_cp, n_sc):
 
 # _____________________________________________________________________________________
 #  DETECTOR MMSE DE UNA ETAPA (apoyo del SIC)                                 Recepción
-#  Entra lo recibido residual R (N_R × N_SC) y las columnas ACTIVAS del canal efectivo
-#  Hg_act (N_SC × N_R × N_ACT): la señal a detectar (columna 0) y las que AÚN interfieren
-#  (columnas 1..). Sale la estimación de la señal 0:
-#        W = (H_aᴴ H_a + (N0/Es)·I)⁻¹ H_aᴴ           (filtro MMSE por subportadora)
-#        ŝ = fila 0 de (W · r̄)
+#  Entra lo recibido residual R (N × N_SC) y las columnas ACTIVAS del canal efectivo
+#  Hg_act (N_SC × N × N_ACT): la señal a detectar (columna 0) y las que AÚN interfieren
+#  (columnas 1..). Sale la estimación de la señal 0, subportadora a subportadora:
+#        W[k] = (H_aᴴ[k] H_a[k] + (N0/Es)·I)⁻¹ H_aᴴ[k]      (filtro MMSE de la subportadora k)
+#        ŝ[k] = fila 0 de (W[k] · r̄[k])
 #  El término (N0/Es)·I frena el realce de ruido. OJO: con la normalización OFDM el
-#  cargado N0/Es vale (potencia_recibida)·(N_SC/N_FFT)/SNR, no simplemente 1/SNR.
+#  cargado N0/Es vale (potencia_recibida)·(N_SC/N_FFT)/SNR, no simplemente 1/SNR (si se
+#  usara 1/SNR el MMSE quedaría mal calibrado).
 # _____________________________________________________________________________________
 def detector_mmse_etapa(R, Hg_act, carga_ruido):
     n_act = Hg_act.shape[2]
-    HaH = np.conj(np.transpose(Hg_act, (0, 2, 1)))            # (N_SC, N_ACT, N_R)
+    HaH = np.conj(np.transpose(Hg_act, (0, 2, 1)))            # (N_SC, N_ACT, N)
     A = HaH @ Hg_act + carga_ruido * np.eye(n_act)            # (N_SC, N_ACT, N_ACT)
-    W = np.linalg.solve(A, HaH)                               # (N_SC, N_ACT, N_R)
-    rs = np.transpose(R, (1, 0))[:, :, None]                  # (N_SC, N_R, 1)
+    W = np.linalg.solve(A, HaH)                               # (N_SC, N_ACT, N)
+    rs = np.transpose(R, (1, 0))[:, :, None]                  # (N_SC, N, 1)
     return (W @ rs)[:, 0, 0]                                  # ŝ de la señal 0 (N_SC,)
 
 
 # _____________________________________________________________________________________
 #  SIC — CANCELACIÓN SUCESIVA DE INTERFERENCIA (EL PASO CLAVE DEL RX)         Recepción
 #  Implementa el receptor NO LINEAL de las diapositivas 206-207. Entra lo recibido R
-#  (N_R × N_SC), el canal efectivo Hg (N_R × N_T × N_SC, ya con el 1/√N_T) y el perfil
-#  PARC. Para cada señal i = 0 … N_L-1 (¡en orden de robustez!):
+#  (N × N_SC), el canal efectivo Hg (N × N × N_SC, ya con el 1/√N) y el perfil PARC.
+#  Para cada señal i = 0 … N-1 (¡en orden de robustez!):
 #     1. DETECTA la señal i con MMSE, tratando las señales i+1… como interferencia.
-#        (La señal 0 sufre N_T-1 interferentes → por eso es la más robusta.)
+#        (La señal 0 sufre N-1 interferentes → por eso es la más robusta.)
 #     2. "DECODIFICA": demapeo por decisión dura (procesamiento NO LINEAL).
 #     3. "RE-ENCODING": vuelve a mapear los bits decididos → réplica limpia de la señal.
 #     4. RESTA su contribución (Hg_i · ŝ_limpia) de TODAS las antenas: la señal i+1 se
 #        decodificará con SIR mejorada.
-#  Si una decisión es errónea la resta introduce error (propagación de errores): otra
-#  razón para dar más robustez a las primeras señales.
+#  Si una decisión es errónea la resta introduce error (propagación de errores): por eso
+#  PARC y SIC van juntos — las primeras decisiones deben ser fiables.
 #  Devuelve (bits por señal, símbolos detectados por señal).
 # _____________________________________________________________________________________
 def sic_rx(R, Hg, perfil, carga_ruido):
-    n_rx, n_tx, n_sc = Hg.shape
-    Hg_t = np.transpose(Hg, (2, 0, 1))                        # (N_SC, N_R, N_T)
+    n_ant = Hg.shape[0]
+    Hg_t = np.transpose(Hg, (2, 0, 1))                        # (N_SC, N, N)
     R_res = R.copy()                                          # Residual: se le van restando señales
     bits_por_senal, simbolos_por_senal = [], []
-    for i in range(n_tx):                                     # ← Etapas del SIC (diapo 207)
+    for i in range(n_ant):                                    # ← Etapas del SIC (diapo 207)
         s_est = detector_mmse_etapa(R_res, Hg_t[:, :, i:], carga_ruido)   # 1. Detección MMSE
         mod = MODULACIONES[perfil[i]]
         bits_i = mod["demapear"](s_est)                       # 2. "Decoding" (decisión dura, NO lineal)
@@ -301,27 +329,37 @@ def sic_rx(R, Hg, perfil, carga_ruido):
 #  RECEPTOR LINEAL (SIN SIC) — solo para comparar                             Recepción
 #  Detecta TODAS las señales de una vez con un único filtro MMSE, sin cancelar nada:
 #  cada señal queda con la interferencia residual de las demás. Comparado con el SIC
-#  evidencia el beneficio del procesamiento no lineal.
+#  evidencia el beneficio del procesamiento no lineal (con texto se ve directo: el SIC
+#  recupera el mensaje legible y el lineal lo entrega corrupto).
 # _____________________________________________________________________________________
 def rx_lineal(R, Hg, perfil, carga_ruido):
-    n_rx, n_tx, n_sc = Hg.shape
-    Hg_t = np.transpose(Hg, (2, 0, 1))                        # (N_SC, N_R, N_T)
+    n_ant = Hg.shape[0]
+    Hg_t = np.transpose(Hg, (2, 0, 1))                        # (N_SC, N, N)
     HgH = np.conj(np.transpose(Hg_t, (0, 2, 1)))
-    A = HgH @ Hg_t + carga_ruido * np.eye(n_tx)
-    W = np.linalg.solve(A, HgH)                               # (N_SC, N_T, N_R)
-    S = (W @ np.transpose(R, (1, 0))[:, :, None])[:, :, 0]    # (N_SC, N_T)
-    bits_por_senal = [MODULACIONES[perfil[i]]["demapear"](S[:, i]) for i in range(n_tx)]
-    simbolos_por_senal = [S[:, i] for i in range(n_tx)]
+    A = HgH @ Hg_t + carga_ruido * np.eye(n_ant)
+    S = (np.linalg.solve(A, HgH) @ np.transpose(R, (1, 0))[:, :, None])[:, :, 0]   # (N_SC, N)
+    bits_por_senal = [MODULACIONES[perfil[i]]["demapear"](S[:, i]) for i in range(n_ant)]
+    simbolos_por_senal = [S[:, i] for i in range(n_ant)]
     return bits_por_senal, simbolos_por_senal
 
 
 # _____________________________________________________________________________________
 #  REMULTIPLEXAR LOS BITS                                                     Recepción
 #  Entran los bits decodificados de cada señal y sale el bloque en el orden original
-#  (el inverso exacto de demux_bits), listo para rearmar la imagen.
+#  (el inverso exacto de demux_bits), listo para rearmar la imagen o el texto.
 # _____________________________________________________________________________________
 def remux_bits(bits_por_senal):
     return np.concatenate(bits_por_senal)
+
+
+# _____________________________________________________________________________________
+#  BITS → TEXTO (fuente de texto)                                             Recepción
+#  Reagrupa los bits recibidos en bytes y los decodifica como UTF-8. Un byte corrupto por
+#  errores de bit se muestra como "�": con la fuente de texto, la calidad del enlace se
+#  VE directamente en el mensaje recuperado.
+# _____________________________________________________________________________________
+def bits_a_texto(bits):
+    return np.packbits(bits).tobytes().decode("utf-8", errors="replace")
 
 
 # _____________________________________________________________________________________
@@ -395,41 +433,56 @@ MODULACIONES = {
 
 
 # =====================================================================================
-# ||   FLUJO COMPLETO — cómo se encadenan los pasos (un uso de canal, N_T × N_R)      ||
+# ||    FLUJO COMPLETO — cómo se encadenan los pasos (un uso de canal, N × N)         ||
 # =====================================================================================
 
 # _____________________________________________________________________________________
 #  CADENA MULTIPLEXACIÓN ESPACIAL MULTI-CODEWORD + SIC                    Todo el flujo
-#  Entra el bloque de bits de UN uso de canal (n_sc·Σbps bits) y salen los bits
-#  recuperados en el mismo orden. Las N_L señales viajan SIMULTÁNEAMENTE (misma banda,
-#  mismo tiempo): el tiempo de envío se divide ~N_L, a cambio de interferencia mutua
-#  que el SIC va cancelando etapa por etapa.
+#  Entra el bloque de bits de UN uso de canal (n_sc·Σbps bits de la imagen o del texto)
+#  y salen los bits recuperados en el mismo orden. Las N señales viajan SIMULTÁNEAMENTE
+#  por las MISMAS subportadoras (misma banda, mismo tiempo): el tiempo de envío se divide
+#  ≈ N, a cambio de la interferencia mutua que el SIC va cancelando etapa por etapa.
 # _____________________________________________________________________________________
 def cadena_mimo_sm(bits_uso, n_sc, n_fft, n_cp, fs, snr_db, rng,
-                   n_tx, n_rx, perfil, usar_sic=True):
+                   n_ant, perfil, usar_sic=True):
     # --- TRANSMISIÓN (diapo 204): demux → coding & modulation POR SEÑAL → antenas ---
-    flujos_bits = demux_bits(bits_uso, n_sc, perfil)         # N_L señales independientes
+    flujos_bits = demux_bits(bits_uso, n_sc, perfil)         # N señales independientes
     S = modular_senales(flujos_bits, perfil, n_sc)           # ← Multi-codeword (PARC)
-    X = mapear_a_antenas(S, n_tx)                            # Mapping to antennas (×1/√N_T)
+    X = mapear_a_antenas(S, n_ant)                           # Mapping to antennas (×1/√N)
     _, indices_fft = mapeo_sc_a_fft(X[0], n_fft)             # Bins de la FFT en uso
 
-    # --- CANAL: matriz H[k] por subportadora; cada RX recibe la SUMA de las N_T señales ---
-    H = generar_canal_mimo(n_fft, fs, indices_fft, rng, n_tx, n_rx)
-    R = np.zeros((n_rx, n_sc), dtype=complex)
+    # --- CANAL: matriz H[k] (N × N) por subportadora; cada RX recibe la SUMA de las N señales ---
+    H = generar_canal_mimo(n_fft, fs, indices_fft, rng, n_ant)
+    R = np.zeros((n_ant, n_sc), dtype=complex)
     pot_rx = 0.0
-    for r in range(n_rx):
+    for r in range(n_ant):
         senal = sum(modulacion_ofdm(X[t] * H[r, t], n_fft, n_cp)[0]   # señal t por su canal…
-                    for t in range(n_tx))                             # …TODAS suman en el aire
+                    for t in range(n_ant))                            # …TODAS suman en el aire
         pot_rx += np.mean(np.abs(senal) ** 2)                         # (para calibrar el MMSE)
         senal = agregar_ruido_awgn(senal, snr_db, rng)                # AWGN en el receptor
         R[r] = demodulacion_ofdm(senal, indices_fft, n_fft, n_cp, n_sc)
 
     # --- RECEPCIÓN (diapo 207): SIC no lineal (o lineal para comparar) ---
-    Hg = H / np.sqrt(n_tx)                                   # Canal efectivo (incluye 1/√N_T)
+    Hg = H / np.sqrt(n_ant)                                  # Canal efectivo (incluye 1/√N)
     snr_lin = 10 ** (snr_db / 10)
-    carga = (pot_rx / n_rx) * (n_sc / n_fft) / snr_lin       # N0/Es por subportadora
+    carga = (pot_rx / n_ant) * (n_sc / n_fft) / snr_lin      # N0/Es por subportadora
     if usar_sic:
         bits_por_senal, _ = sic_rx(R, Hg, perfil, carga)     # ← PASO CLAVE: SIC por etapas
     else:
         bits_por_senal, _ = rx_lineal(R, Hg, perfil, carga)  # Lineal (con interferencia residual)
     return remux_bits(bits_por_senal)                        # Bits en el orden original
+
+
+# _____________________________________________________________________________________
+#  TIEMPO DE ENVÍO DE LA FUENTE                                            Todo el flujo
+#  Entra el tamaño de la fuente en bits y sale el tiempo "en el aire" para transmitirla:
+#        usos de canal = ceil(n_bits / (n_sc·Σbps))   →   t = usos · (n_fft+n_cp)/fs
+#  Como cada uso de canal lleva las N señales A LA VEZ, Σbps crece con N y el tiempo se
+#  divide ≈ N respecto al SISO: este es el BENEFICIO de la multiplexación espacial, que
+#  compensa la mayor interferencia (y se grafica en la pestaña "Tiempo de envío" del
+#  Monte Carlo).
+# _____________________________________________________________________________________
+def tiempo_envio_s(n_bits, n_sc, n_fft, n_cp, fs, perfil):
+    bits_por_uso = n_sc * sum(MODULACIONES[m]["bits"] for m in perfil)
+    usos = int(np.ceil(n_bits / bits_por_uso))
+    return usos * (n_fft + n_cp) / fs
