@@ -1663,7 +1663,7 @@ function crearPanelMIMO() {
     ).join('') +
       '<div class="kv" style="grid-column:1/-1"><div class="kv-label" style="font-size:12px">' +
       'Multiplexación espacial multi-codeword: N_L señales independientes simultáneas (reparto de potencia 1/√N_T, sin pilotos), ' +
-      'PARC: la 1ª señal decodificada (más interferida) usa la modulación más robusta. Receptor SIC no lineal.' +
+      'PARC: la 1ª señal decodificada (más interferida) usa la modulación más robusta. Receptor SIC.' +
       '</div></div>';
   }
 

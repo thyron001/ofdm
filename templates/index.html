@@ -951,7 +951,7 @@ Sed eget metus felis. Sed suscipit ultrices sapien. Mauris sit amet efficitur fe
 
       <!-- Diagrama del sistema: TX multi-codeword (diapo 204) + RX SIC (diapo 207) -->
       <section class="tarjeta">
-        <h2>Multiplexación espacial — TX Multi-Codeword + receptor no lineal (SIC)</h2>
+        <h2>Multiplexación espacial — TX Multi-Codeword + receptor SIC</h2>
         <p class="nota">
           El transmisor envía <strong>N<sub>L</sub> señales completamente independientes a la
           vez</strong>, una por antena (siempre con <strong>N<sub>T</sub> = N<sub>R</sub></strong>):
@@ -960,8 +960,8 @@ Sed eget metus felis. Sed suscipit ultrices sapien. Mauris sit amet efficitur fe
           mutuamente</strong>, y a más antenas, más interferencia. En el <strong>TX multi-codeword</strong>
           cada señal tiene su propio bloque de <em>coding &amp; modulation</em>, lo que permite darles
           <strong>distinta robustez (PARC)</strong>: la primera señal en decodificarse (máxima interferencia)
-          usa la modulación más robusta. El receptor aplica <strong>SIC</strong> (procesamiento
-          <strong>no lineal</strong>): demodula y decodifica la 1ª señal, la <strong>re-codifica</strong>
+          usa la modulación más robusta. El receptor aplica <strong>SIC</strong> (cancelación
+          sucesiva de interferencia): demodula y decodifica la 1ª señal, la <strong>re-codifica</strong>
           y la <strong>resta</strong> de lo recibido; la 2ª se decodifica con SIR mejorada… y así
           sucesivamente hasta la señal N<sub>L</sub>.
         </p>
@@ -1024,7 +1024,7 @@ Sed eget metus felis. Sed suscipit ultrices sapien. Mauris sit amet efficitur fe
                 <div class="estado" id="mimo-texto-tx" style="white-space:pre-wrap; text-align:left"></div>
               </div>
               <div class="campo">
-                <label class="campo-label">Recuperado con SIC (no lineal)</label>
+                <label class="campo-label">Recuperado con SIC</label>
                 <div class="estado ok" id="mimo-texto-rx" style="white-space:pre-wrap; text-align:left"></div>
               </div>
             </div>
@@ -1051,7 +1051,7 @@ Sed eget metus felis. Sed suscipit ultrices sapien. Mauris sit amet efficitur fe
               </figure>
               <figure>
                 <canvas id="mimo-constelacion-despues-canvas" class="constelacion-canvas" width="360" height="360"></canvas>
-                <figcaption id="mimo-titulo-despues">SIC (no lineal)</figcaption>
+                <figcaption id="mimo-titulo-despues">SIC (flujos separados)</figcaption>
               </figure>
             </div>
             <div class="estado" id="mimo-resumen-constelacion" style="margin-top:6px"></div>

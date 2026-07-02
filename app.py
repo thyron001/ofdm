@@ -975,9 +975,9 @@ def cadena_tx_beamforming_rx(bits_tx: np.ndarray, modulacion: str, params: Dict,
 #     Eso permite dar DIFERENTE ROBUSTEZ a cada señal (PARC, diapo 208): la 1ª en
 #     decodificarse (máxima interferencia) usa la modulación más robusta (QPSK); las
 #     últimas (ya sin interferencia por el SIC) usan modulaciones más agresivas.
-#   · RX NO LINEAL — SIC (diapos 206-207): demodula/decodifica la 1ª señal (MMSE),
-#     la RE-CODIFICA (decisión dura → réplica limpia) y la RESTA de todas las antenas;
-#     la 2ª señal se decodifica con SIR mejorada… y así hasta la señal N_L.
+#   · RX SIC — Successive Interference Cancellation (diapos 206-207): demodula/decodifica
+#     la 1ª señal (MMSE), la RE-CODIFICA (decisión dura → réplica limpia) y la RESTA de
+#     todas las antenas; la 2ª señal se decodifica con SIR mejorada… y así hasta la señal N_L.
 # Cada antena TX se escala por 1/√N_T (potencia total constante). Sin pilotos (CSI genie).
 # La versión didáctica y comentada paso a paso está en mimo.py.
 
@@ -996,36 +996,25 @@ def perfil_parc(modulacion: str, n_senales: int) -> list:
     return [_ORDEN_MODS_PARC[max(0, idx - (n_senales - 1 - i))] for i in range(n_senales)]
 
 
-def _sic_rx(R: np.ndarray, Hg: np.ndarray, perfil: list, carga_ruido: float,
-            usar_sic: bool = True) -> Tuple[list, list]:
+def _sic_rx(R: np.ndarray, Hg: np.ndarray, perfil: list, carga_ruido: float) -> Tuple[list, list]:
     """
-    Receptor de multiplexación espacial, VECTORIZADO por subportadora (numpy resuelve un
-    sistema por subportadora en lote).
+    Receptor SIC (Successive Interference Cancellation), VECTORIZADO por subportadora (numpy
+    resuelve un sistema por subportadora en lote).
       - R      : recibido por antena, forma (N_R, N_SC).
       - Hg     : canal efectivo (incluye 1/√N_T), forma (N_R, N_T, N_SC).
       - perfil : modulación de cada señal (PARC), en orden de decodificación.
       - carga_ruido : cargado N0/Es del MMSE. Por la normalización OFDM vale
                       (potencia_recibida)·(N_SC/N_FFT)/SNR, NO simplemente 1/SNR.
-    Con usar_sic=True aplica el SIC de las diapos 206-207: por cada señal i,
+    Aplica el SIC de las diapos 206-207: por cada señal i,
       1. detecta con MMSE tratando las señales i+1… como interferencia,
-      2. "decodifica" (demapeo por decisión dura → procesamiento NO LINEAL),
+      2. "decodifica" (demapeo por decisión dura),
       3. "re-encoding": re-mapea los bits → réplica limpia,
       4. RESTA su contribución de todas las antenas (la señal i+1 ve SIR mejorada).
-    Con usar_sic=False detecta todas las señales con un único MMSE lineal (queda
-    interferencia residual entre señales): sirve para comparar y justificar el SIC.
     Devuelve (bits por señal, símbolos detectados por señal).
     """
     n_rx, n_tx, n_sc = Hg.shape
     Hg_t = np.transpose(Hg, (2, 0, 1))                        # (N_SC, N_R, N_T)
     rs = np.transpose(R, (1, 0))[:, :, None]                  # (N_SC, N_R, 1)
-
-    if not usar_sic:
-        # --- Receptor LINEAL (referencia): un solo filtro MMSE para todas las señales ---
-        HgH = np.conj(np.transpose(Hg_t, (0, 2, 1)))          # (N_SC, N_T, N_R)
-        A = HgH @ Hg_t + carga_ruido * np.eye(n_tx)
-        S = (np.linalg.solve(A, HgH) @ rs)[:, :, 0]           # (N_SC, N_T)
-        bits = [MODULACIONES[perfil[i]]["demapear"](S[:, i]) for i in range(n_tx)]
-        return bits, [S[:, i] for i in range(n_tx)]
 
     # --- SIC (diapo 207): detectar → decodificar → re-codificar → restar, por etapas ---
     bits_por_senal, simbolos_por_senal = [], []
@@ -1047,7 +1036,7 @@ def cadena_tx_mimo_rx(bits_tx: np.ndarray, modulacion: str, params: Dict,
                       snr_db: float, rng: np.random.Generator,
                       capturar_constelaciones: bool = False,
                       n_tx: int = 2, n_rx: int = 2,
-                      usar_sic: bool = True, usar_parc: bool = True) -> Dict:
+                      usar_parc: bool = True) -> Dict:
     """
     Núcleo de la Práctica 6 (multiplexación espacial multi-codeword + SIC):
 
@@ -1055,7 +1044,7 @@ def cadena_tx_mimo_rx(bits_tx: np.ndarray, modulacion: str, params: Dict,
       - n_tx >= 2  -> N_T señales independientes simultáneas. Cada uso de canal transporta
                       n_sc·Σbps bits (la tasa crece ≈×N_L y el tiempo de aire se divide),
                       a costa de interferencia mutua entre señales, que el receptor SIC
-                      cancela por etapas (usar_sic=False deja el lineal para comparar).
+                      cancela por etapas.
 
     `modulacion` es la de la señal MENOS interferida; con usar_parc=True las primeras
     señales usan modulaciones más robustas (escalera PARC); con usar_parc=False todas las
@@ -1115,9 +1104,9 @@ def cadena_tx_mimo_rx(bits_tx: np.ndarray, modulacion: str, params: Dict,
             senal = agregar_ruido_awgn(senal, snr_db, rng)
             R[r] = demodulacion_ofdm(senal, indices_fft, n_fft, n_cp, n_sc)
 
-        # --- RX: SIC no lineal (o MMSE lineal para comparar) ---
+        # --- RX: SIC (cancelación sucesiva de interferencia) ---
         carga = (pot_rx / n_rx) * (n_sc / n_fft) / snr_lin     # N0/Es (medido y verificado)
-        bits_por_senal, simb_por_senal = _sic_rx(R, esc * H_full, perfil, carga, usar_sic)
+        bits_por_senal, simb_por_senal = _sic_rx(R, esc * H_full, perfil, carga)
 
         # --- Remux + BER por señal ---
         for t in range(n_tx):
@@ -2214,7 +2203,7 @@ def simular_mimo():
     t0 = time.perf_counter()
     resultado = cadena_tx_mimo_rx(bits_tx, modulacion, params, snr, rng,   # PARC + SIC
                                   capturar_constelaciones=True,
-                                  n_tx=n_ant, n_rx=n_ant, usar_sic=True, usar_parc=True)
+                                  n_tx=n_ant, n_rx=n_ant, usar_parc=True)
     tiempo_computo_s = time.perf_counter() - t0
 
     # Tiempo de envío: MIMO transporta n_sc·Σbps bits por uso de canal → menos símbolos OFDM.
@@ -2306,7 +2295,7 @@ def montecarlo_mimo():
     for nombre, n_ant in [("1x1", 1), ("2x2", 2), ("3x3", 3), ("4x4", 4)]:
         f = corrida(lambda bits, snr, n=n_ant: cadena_tx_mimo_rx(
             bits, modulacion, params, snr, rng, n_tx=n, n_rx=n,
-            usar_sic=True, usar_parc=False)["ber"])
+            usar_parc=False)["ber"])
         ber_prom, ic_inf, ic_sup = _curva_ber_mc(f, snr_valores, n_sim, t_critico)
         series_ber.append({"config": nombre, "n_senales": n_ant,
                            "ber_promedio": ber_prom, "ic_inferior": ic_inf, "ic_superior": ic_sup})
