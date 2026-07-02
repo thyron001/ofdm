@@ -1551,13 +1551,11 @@ function crearPanelBeamforming() {
 // simultáneas (multi-codeword: modulación propia por señal, PARC) y el RX aplica SIC
 // (detectar → decodificar → re-codificar → restar). Solo configuraciones SIMÉTRICAS
 // (N_T = N_R). Fuente de datos: imagen (lena por defecto) o texto. Color = configuración;
-// el par PARC (morado) compara SIC vs lineal para evidenciar el procesamiento no lineal.
-const COLORES_MIMO = { '1x1': '#888888', '2x2': '#18A34B', '3x3': '#1E54E0', '4x4': '#D82A2A',
-                       '4x4-parc': '#7A28C7', '4x4-parc-lineal': '#7A28C7' };
+// las curvas del Monte Carlo (1x1..4x4, SIC) muestran la interferencia creciente.
+const COLORES_MIMO = { '1x1': '#888888', '2x2': '#18A34B', '3x3': '#1E54E0', '4x4': '#D82A2A' };
 const ETIQUETAS_MIMO = {
   '1x1': '1×1 — 1 señal (sin interferencia)', '2x2': '2×2 SIC — 2 señales',
   '3x3': '3×3 SIC — 3 señales', '4x4': '4×4 SIC — 4 señales',
-  '4x4-parc': '4×4 PARC + SIC', '4x4-parc-lineal': '4×4 PARC lineal (sin SIC)',
 };
 const ORDEN_MODS_PARC = ['QPSK', '16-QAM', '64-QAM'];
 
@@ -1763,7 +1761,7 @@ function crearPanelMIMO() {
     }
   }
 
-  // ---------- Simulación única (fuente + BER por señal + lineal vs SIC) ----------
+  // ---------- Simulación única (fuente + BER por señal + mezcla vs SIC) ----------
   async function ejecutarSimulacion() {
     const fuente = $('mimo-fuente').value;
     if (fuente === 'imagen' && !estado.imagenSubida) { alert('Sube una imagen o cambia la fuente a Texto'); return; }
@@ -1808,7 +1806,6 @@ function crearPanelMIMO() {
       $('mimo-res-texto').style.display = 'block';
       $('mimo-texto-tx').textContent = j.texto_original || '';
       $('mimo-texto-rx').textContent = j.texto_recuperado || '';
-      $('mimo-texto-rx-lineal').textContent = j.texto_recuperado_lineal || '';
     } else {
       $('mimo-titulo-fuente').textContent = 'Imágenes TX / RX';
       $('mimo-res-imagen').style.display = 'block';
@@ -1831,11 +1828,10 @@ function crearPanelMIMO() {
       dibujarNube('mimo-constelacion-antes-canvas', j.constelacion_rx_antes, j.modulacion, 'rgba(216,42,42,0.40)');
     }
     dibujarNube('mimo-constelacion-despues-canvas', j.constelacion_rx, j.modulacion, 'rgba(24,163,75,0.5)');
-    const beraTxt = (typeof j.ber_antes === 'number') ? ` (BER lineal ≈ ${(j.ber_antes * 100).toFixed(3)} %)` : '';
     $('mimo-resumen-constelacion').textContent =
-      `Izquierda: receptor LINEAL — las ${j.n_senales} señales quedan con interferencia residual (nube difusa)${beraTxt}. ` +
-      `Derecha: SIC — cada señal se decodifica, se re-codifica y se resta; las siguientes ven menos interferencia (nube más limpia). ` +
-      `Ambas superponen las constelaciones del perfil ${j.perfil.join('+')}.`;
+      `Izquierda: lo recibido en una antena con las ${j.n_senales} señales MEZCLADAS en el aire (nube difusa: interferencia mutua). ` +
+      `Derecha: tras el SIC — cada señal se decodifica, se re-codifica y se resta; los flujos quedan SEPARADOS ` +
+      `(superposición de las constelaciones del perfil ${j.perfil.join('+')}).`;
     renderKV(j.parametros, { tiempo_aire_s: j.tiempo_aire_s, tiempo_aire_siso_s: j.tiempo_aire_siso_s });
     dibujarMapaSF(j.parametros.n_sc);
   }
@@ -1844,7 +1840,7 @@ function crearPanelMIMO() {
   async function ejecutarMontecarlo() {
     $('mimo-btn-mc').disabled = true;
     $('mimo-btn-mc').innerHTML = '<span class="spinner"></span> Ejecutando Monte Carlo...';
-    $('mimo-estado-sim').textContent = 'Monte Carlo: 1×1/2×2/3×3/4×4 (SIC) + par PARC (SIC vs lineal) × 16 SNR × 8 corridas (puede tardar)...';
+    $('mimo-estado-sim').textContent = 'Monte Carlo: 1×1/2×2/3×3/4×4 (SIC) × 16 SNR × 8 corridas (puede tardar)...';
     $('mimo-estado-sim').className = 'estado';
     const payload = {
       bw_mhz: parseFloat($('mimo-bw').value),
@@ -1881,8 +1877,6 @@ function crearPanelMIMO() {
       })),
       borderColor: COLORES_MIMO[s.config] || '#1E54E0',
       backgroundColor: COLORES_MIMO[s.config] || '#1E54E0',
-      borderDash: s.config.endsWith('lineal') ? [6, 4] : [],       // sin SIC → discontinua
-      pointStyle: s.config.endsWith('lineal') ? 'triangle' : 'circle',
       pointRadius: 4, tension: 0.15, fill: false,
     }));
     return new Chart($(canvasId).getContext('2d'), {
@@ -1959,7 +1953,7 @@ function crearPanelMIMO() {
     if (estado.graficoMC) estado.graficoMC.destroy();
     if (estado.graficoTiempo) estado.graficoTiempo.destroy();
     estado.graficoMC = construirGraficoBER('mimo-montecarlo-canvas', j.series_ber,
-      'Más antenas ⇒ más señales interfiriéndose ⇒ peor BER · PARC+SIC vs lineal (morado)');
+      'Más antenas ⇒ más señales interfiriéndose ⇒ peor BER (receptor SIC)');
     $('mimo-titulo-tiempo').textContent =
       `Tiempo de envío de ${j.n_bits_ref.toLocaleString()} bits vs configuración — ${j.modulacion}`;
     estado.graficoTiempo = construirGraficoTiempo('mimo-tiempo-canvas', j.series_tiempo,

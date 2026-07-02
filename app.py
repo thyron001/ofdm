@@ -2173,10 +2173,9 @@ def simular_mimo():
     Práctica 6 (multiplexación espacial multi-codeword + SIC): ejecuta UNA transmisión de la
     fuente elegida (imagen cargada o texto) con N señales independientes (perfil PARC: las
     primeras más robustas) y receptor SIC, en la configuración simétrica elegida (2x2 / 3x3 /
-    4x4, siempre N_T = N_R). Para evidenciar el beneficio del procesamiento NO lineal ejecuta
-    además la MISMA configuración con receptor LINEAL (sin SIC) sobre los mismos bits.
-    Devuelve la fuente recuperada (imagen o texto), la BER total y POR SEÑAL, las
-    constelaciones (lineal vs SIC), el perfil PARC y los tiempos de envío (MIMO vs SISO).
+    4x4, siempre N_T = N_R). Devuelve la fuente recuperada (imagen o texto), la BER total y
+    POR SEÑAL, las constelaciones (recibido crudo con las señales mezcladas vs separadas por
+    el SIC), el perfil PARC y los tiempos de envío (MIMO vs SISO).
     """
     data = request.get_json(force=True)
     try:
@@ -2213,12 +2212,9 @@ def simular_mimo():
 
     rng = np.random.default_rng()
     t0 = time.perf_counter()
-    resultado = cadena_tx_mimo_rx(bits_tx, modulacion, params, snr, rng,   # "Después": PARC + SIC
+    resultado = cadena_tx_mimo_rx(bits_tx, modulacion, params, snr, rng,   # PARC + SIC
                                   capturar_constelaciones=True,
                                   n_tx=n_ant, n_rx=n_ant, usar_sic=True, usar_parc=True)
-    ref = cadena_tx_mimo_rx(bits_tx, modulacion, params, snr, rng,         # "Antes": receptor LINEAL
-                            capturar_constelaciones=True,
-                            n_tx=n_ant, n_rx=n_ant, usar_sic=False, usar_parc=True)
     tiempo_computo_s = time.perf_counter() - t0
 
     # Tiempo de envío: MIMO transporta n_sc·Σbps bits por uso de canal → menos símbolos OFDM.
@@ -2234,10 +2230,9 @@ def simular_mimo():
         return arr
 
     c_rx = submuestrear(resultado["constelacion_rx"])               # Tras el SIC (señales separadas y limpias)
-    c_antes = submuestrear(ref["constelacion_rx"])                  # Receptor lineal (interferencia residual)
+    c_antes = submuestrear(resultado["constelacion_rx_antes"])      # Recibido crudo (señales mezcladas)
     salida = {                                                      # Respuesta JSON al frontend
         "ber": resultado["ber"],
-        "ber_antes": ref["ber"],
         "ber_por_flujo": resultado["ber_por_flujo"],
         "perfil": resultado["perfil"],
         "fuente": fuente,
@@ -2260,7 +2255,6 @@ def simular_mimo():
     if fuente == "texto":
         salida["texto_original"] = texto
         salida["texto_recuperado"] = bits_a_texto(resultado["bits_rx"])       # Tras el SIC
-        salida["texto_recuperado_lineal"] = bits_a_texto(ref["bits_rx"])      # Receptor lineal
     else:
         img_rx = bits_a_imagen(resultado["bits_rx"], ESTADO["imagen_mode"], ESTADO["imagen_size"])
         img_tx = Image.open(io.BytesIO(ESTADO["imagen_bytes"]))
@@ -2278,9 +2272,6 @@ def montecarlo_mimo():
         señales con la MISMA modulación (sin PARC), para AISLAR el efecto interferencia:
         cada señal adicional interfiere a las demás y reparte la potencia (1/√N) → la BER
         EMPEORA al aumentar el número de antenas (el precio de multiplicar la tasa).
-        Incluye además el par 4x4 CON PARC (robustez diferenciada por señal): SIC vs
-        receptor lineal — con PARC las primeras decisiones del SIC son fiables (diapo 208)
-        y el procesamiento no lineal gana claramente, con ventaja creciente en SNR.
       - series_tiempo: tiempo de envío (aire) de un mismo mensaje de referencia para cada
         configuración: con N señales simultáneas se usan ~N veces menos símbolos OFDM → el
         tiempo se divide por N. Es el BENEFICIO que compensa la interferencia.
@@ -2318,16 +2309,6 @@ def montecarlo_mimo():
             usar_sic=True, usar_parc=False)["ber"])
         ber_prom, ic_inf, ic_sup = _curva_ber_mc(f, snr_valores, n_sim, t_critico)
         series_ber.append({"config": nombre, "n_senales": n_ant,
-                           "ber_promedio": ber_prom, "ic_inferior": ic_inf, "ic_superior": ic_sup})
-
-    # Par 4x4 CON PARC: SIC vs lineal. El PARC hace fiables las primeras decisiones del
-    # SIC (diapo 208) y ahí el procesamiento NO LINEAL gana claramente al receptor lineal.
-    for nombre, sic in [("4x4-parc", True), ("4x4-parc-lineal", False)]:
-        f = corrida(lambda bits, snr, s_=sic: cadena_tx_mimo_rx(
-            bits, modulacion, params, snr, rng, n_tx=4, n_rx=4,
-            usar_sic=s_, usar_parc=True)["ber"])
-        ber_prom, ic_inf, ic_sup = _curva_ber_mc(f, snr_valores, n_sim, t_critico)
-        series_ber.append({"config": nombre, "n_senales": 4,
                            "ber_promedio": ber_prom, "ic_inferior": ic_inf, "ic_superior": ic_sup})
 
     # --- Tiempo de envío (aire) por configuración, para un mismo mensaje de referencia ---
